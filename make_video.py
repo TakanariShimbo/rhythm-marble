@@ -48,6 +48,8 @@ PLAT_H = 0.03                # 板の厚さ (m)。極薄
 PLAT_LIFE = 1.2              # 板が着地後に消えるまでの時間 (s)
 PLAT_LEAD = 1.2              # 板が着地の何秒前に現れるか (s)
 ENTRY_FALL = 1.5             # 最初の板に当たる前の落下時間 (s)。静止から落ちる導入部
+EMERGE_T = 1.3               # 壁の穴からボールが出てくる演出の時間 (s)
+WALL_DEPTH = 0.25            # 壁の奥行き位置(Blender側のWALL_Yと一致させる)
 
 GAP_MAX = 0.75               # ノート間隔がこれを超えたらレールで転がす (s)
 RAIL_SLOPE = np.radians(12)  # レールの傾斜角
@@ -395,10 +397,18 @@ def build_path(bounces):
 def ball_pos(pts, pieces, t):
     t0, p0, _ = pts[0]
     if t <= t0:
-        # 開始前: ENTRY_FALL秒の自由落下の途中(物理的に整合する位置)
-        tau = max(0.0, ENTRY_FALL - (t0 - t))
         drop_end = fly(np.zeros(3), np.zeros(3), ENTRY_FALL)[0]
-        return p0 - drop_end + fly(np.zeros(3), np.zeros(3), tau)[0]
+        start = p0 - drop_end          # 落下開始位置(壁の穴の位置)
+        fall_begin = t0 - ENTRY_FALL
+        if t >= fall_begin:
+            # 自由落下フェーズ
+            tau = t - fall_begin
+            return start + fly(np.zeros(3), np.zeros(3), tau)[0]
+        # 出現フェーズ: 壁の中から滑らかに出てくる(最後に一拍置く)
+        s_ = np.clip((t - (fall_begin - EMERGE_T)) / (EMERGE_T - 0.35), 0.0, 1.0)
+        ease = s_ * s_ * (3 - 2 * s_)   # smoothstep
+        z = (WALL_DEPTH + 0.06) * (1.0 - ease)
+        return start + np.array([0.0, 0.0, z])
     return path_pos(pieces, t)
 
 
@@ -705,7 +715,7 @@ def render(pts, pieces, normals, sizes, rails, audio: Path, output: Path,
            end_time: float):
     # 最初のノートのENTRY_FALL秒前(ボール静止)から動画を始め、
     # 音声はその分だけ遅らせて重ねる(無音の落下導入部)
-    t_start = pts[0][0] - ENTRY_FALL
+    t_start = pts[0][0] - ENTRY_FALL - EMERGE_T
     total = end_time + 1.5
     n_frames = int((total - t_start) * FPS)
     delay_ms = int(round(max(0.0, -t_start) * 1000))
@@ -778,7 +788,7 @@ def export_scene(pts, pieces, normals, sizes, rails, output: Path,
     Blender側は物理を知らなくてよい。
     """
     import json
-    t_start = pts[0][0] - ENTRY_FALL
+    t_start = pts[0][0] - ENTRY_FALL - EMERGE_T
     total = end_time + 1.5
     n_frames = int((total - t_start) * FPS)
     cam = Camera(ball_pos(pts, pieces, t_start))
@@ -810,9 +820,13 @@ def export_scene(pts, pieces, normals, sizes, rails, output: Path,
             theta += omega / FPS
         spin_track.append(theta)
         prev = bp
+    p0 = pts[0][1]
+    drop_end = fly(np.zeros(3), np.zeros(3), ENTRY_FALL)[0]
+    start_pos = (p0 - drop_end).tolist()
     data = {
         "fps": FPS,
         "title": TITLE,
+        "start_pos": [float(x) for x in start_pos],
         "t_start": t_start,
         "n_frames": n_frames,
         "audio_delay_ms": int(round(max(0.0, -t_start) * 1000)),

@@ -268,6 +268,171 @@ def add_wall_image(path, location, width, opacity=0.85, desaturate=0.35):
     return ob
 
 
+def add_framed_picture(path, location, width, title, font, plaque_mat,
+                       frame_mat, text_mat):
+    """額縁に入れて壁に飾った絵+下の銘板(美術館スタイル)。
+
+    どんな画像でもそのまま使える(切り抜き・透過不要)。
+    """
+    img = bpy.data.images.load(str(path))
+    aspect = img.size[1] / img.size[0]
+    ih = width * aspect                  # 画像の高さ
+    mat_m = width * 0.07                 # マット(台紙)の余白
+    fw = width + mat_m * 2               # 額の内寸(=マット寸)
+    fh = ih + mat_m * 2
+    bar = 0.035                          # 額縁の枠の太さ
+    depth = 0.03                         # 壁からの出っ張り
+    x, y, z = location
+
+    # マット(白い台紙)
+    white = bpy.data.materials.new("mat_white")
+    white.use_nodes = True
+    wb = white.node_tree.nodes["Principled BSDF"]
+    wb.inputs["Base Color"].default_value = (0.92, 0.91, 0.88, 1)
+    wb.inputs["Roughness"].default_value = 0.85
+    bpy.ops.mesh.primitive_plane_add(size=1)
+    matp = bpy.context.object
+    matp.scale = (fw, fh, 1)
+    matp.rotation_euler = (math.radians(90), 0, 0)
+    matp.location = (x, y - depth * 0.5, z)
+    matp.data.materials.append(white)
+
+    # 画像(マットの上に少し浮かせる)
+    pic_mat = bpy.data.materials.new(f"framed_{path.stem}")
+    pic_mat.use_nodes = True
+    nt = pic_mat.node_tree
+    bsdf = nt.nodes["Principled BSDF"]
+    tex = nt.nodes.new("ShaderNodeTexImage")
+    tex.image = img
+    nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    bsdf.inputs["Roughness"].default_value = 0.65
+    bpy.ops.mesh.primitive_plane_add(size=1)
+    pic = bpy.context.object
+    pic.scale = (width, ih, 1)
+    pic.rotation_euler = (math.radians(90), 0, 0)
+    pic.location = (x, y - depth * 0.5 - 0.003, z)
+    pic.data.materials.append(pic_mat)
+
+    # 額縁の枠(4辺の細い棒)
+    for bx, bz, sx, sz in [(0, fh / 2 + bar / 2, fw + bar * 2, bar),
+                           (0, -fh / 2 - bar / 2, fw + bar * 2, bar),
+                           (-fw / 2 - bar / 2, 0, bar, fh),
+                           (fw / 2 + bar / 2, 0, bar, fh)]:
+        bpy.ops.mesh.primitive_cube_add(size=1)
+        b = bpy.context.object
+        b.scale = (sx, depth, sz)
+        b.location = (x + bx, y - depth / 2, z + bz)
+        b.data.materials.append(frame_mat)
+
+    # 銘板(額の下の真鍮プレート+刻印タイトル)
+    if title:
+        ph = 0.16
+        pw = max(0.62, 0.062 * max(len(l) for l in title.split("\n")))
+        pz = z - fh / 2 - bar - 0.14
+        bpy.ops.mesh.primitive_cube_add(size=1)
+        pl = bpy.context.object
+        pl.scale = (pw, 0.012, ph)
+        pl.location = (x, y - 0.006, pz)
+        bev = pl.modifiers.new("bevel", "BEVEL")
+        bev.width = 0.006
+        bev.segments = 2
+        pl.data.materials.append(plaque_mat)
+        add_wall_text(title, (x, y - 0.014, pz), 0.045, text_mat, font,
+                      extrude=0.002)
+
+
+def add_framed_picture(path, location, width, title, font, plaque_mat,
+                       frame_mat, text_mat):
+    """額縁に入れて壁に飾った絵+下の銘板(美術館スタイル)。
+
+    どんな画像でもそのまま使える(切り抜き・透過不要)。
+    """
+    img = bpy.data.images.load(str(path))
+    aspect = img.size[1] / img.size[0]
+    ih = width * aspect
+    mat_m = width * 0.07                 # マット(台紙)の余白
+    fw = width + mat_m * 2
+    fh = ih + mat_m * 2
+    bar = 0.035
+    depth = 0.03
+    x, y, z = location
+
+    white = bpy.data.materials.new("mat_white")
+    white.use_nodes = True
+    wb = white.node_tree.nodes["Principled BSDF"]
+    wb.inputs["Base Color"].default_value = (0.92, 0.91, 0.88, 1)
+    wb.inputs["Roughness"].default_value = 0.85
+    bpy.ops.mesh.primitive_plane_add(size=1)
+    matp = bpy.context.object
+    matp.scale = (fw, fh, 1)
+    matp.rotation_euler = (math.radians(90), 0, 0)
+    matp.location = (x, y - depth * 0.5, z)
+    matp.data.materials.append(white)
+
+    pic_mat = bpy.data.materials.new(f"framed_{path.stem}")
+    pic_mat.use_nodes = True
+    nt = pic_mat.node_tree
+    bsdf = nt.nodes["Principled BSDF"]
+    tex = nt.nodes.new("ShaderNodeTexImage")
+    tex.image = img
+    nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    bsdf.inputs["Roughness"].default_value = 0.65
+    bpy.ops.mesh.primitive_plane_add(size=1)
+    pic = bpy.context.object
+    pic.scale = (width, ih, 1)
+    pic.rotation_euler = (math.radians(90), 0, 0)
+    pic.location = (x, y - depth * 0.5 - 0.003, z)
+    pic.data.materials.append(pic_mat)
+
+    for bx, bz, sx, sz in [(0, fh / 2 + bar / 2, fw + bar * 2, bar),
+                           (0, -fh / 2 - bar / 2, fw + bar * 2, bar),
+                           (-fw / 2 - bar / 2, 0, bar, fh),
+                           (fw / 2 + bar / 2, 0, bar, fh)]:
+        bpy.ops.mesh.primitive_cube_add(size=1)
+        b = bpy.context.object
+        b.scale = (sx, depth, sz)
+        b.location = (x + bx, y - depth / 2, z + bz)
+        b.data.materials.append(frame_mat)
+
+    if title:
+        ph = 0.16
+        pw = max(0.62, 0.058 * max(len(l) for l in title.split("\n")))
+        pz = z - fh / 2 - bar - 0.15
+        bpy.ops.mesh.primitive_cube_add(size=1)
+        pl = bpy.context.object
+        pl.scale = (pw, 0.012, ph)
+        pl.location = (x, y - 0.006, pz)
+        bev = pl.modifiers.new("bevel", "BEVEL")
+        bev.width = 0.006
+        bev.segments = 2
+        pl.data.materials.append(plaque_mat)
+        add_wall_text(title, (x, y - 0.014, pz), 0.045, text_mat, font,
+                      extrude=0.002)
+
+
+def add_ball_port(location, ball_r, ring_mat):
+    """ボールが出てくる壁の丸いポート(真鍮リング+暗い穴)。"""
+    x, y, z = location
+    bpy.ops.mesh.primitive_torus_add(major_radius=ball_r * 1.22,
+                                     minor_radius=0.018,
+                                     major_segments=48, minor_segments=16)
+    ring = bpy.context.object
+    ring.rotation_euler = (math.radians(90), 0, 0)
+    ring.location = (x, y - 0.012, z)
+    ring.data.materials.append(ring_mat)
+    dark = bpy.data.materials.new("port_hole")
+    dark.use_nodes = True
+    db = dark.node_tree.nodes["Principled BSDF"]
+    db.inputs["Base Color"].default_value = (0.015, 0.015, 0.02, 1)
+    db.inputs["Roughness"].default_value = 0.9
+    bpy.ops.mesh.primitive_cylinder_add(radius=ball_r * 1.12, depth=0.006,
+                                        vertices=48)
+    hole = bpy.context.object
+    hole.rotation_euler = (math.radians(90), 0, 0)
+    hole.location = (x, y - 0.004, z)
+    hole.data.materials.append(dark)
+
+
 def keyframe_visibility(ob, f_in, f_out, fps):
     """スケールで出現/消滅を表現する(0.25秒でポップイン/アウト)。"""
     pop = max(2, int(0.25 * fps))
@@ -364,9 +529,9 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     text_mat = make_material("walltext", (0.30, 0.33, 0.40, 1), rough=0.75)
 
     def resolve_at(at, dy=0.0):
-        """配置指定: "start"=落下開始位置 / "first_plate"=最初の板 / [x, y]"""
+        """配置指定: "start"=壁の穴の位置 / "first_plate"=最初の板 / [x, y]"""
         if at == "start":
-            b0 = sc["ball"][0]
+            b0 = sc.get("start_pos", sc["ball"][0])
             return (b0[0], WALL_Y - 0.012, b0[1] + dy)
         if at == "first_plate":
             p0 = sc["plates"][0]["pos"]
@@ -387,6 +552,33 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
                        resolve_at(im["at"], im.get("dy", 0.0)),
                        im.get("width", 0.8), im.get("opacity", 0.85),
                        im.get("desaturate", 0.35))
+    plaque_mat = make_material("plaque", (0.55, 0.45, 0.25, 1),
+                               metallic=1.0, rough=0.35)
+    for fr in wall_cfg.get("frames", []):
+        frame_mat = make_material("frame", (0.20, 0.19, 0.18, 1),
+                                  metallic=0.7, rough=0.45)
+        plate_text_mat = make_material("plaquetext", (0.16, 0.13, 0.08, 1),
+                                       rough=0.6)
+        add_framed_picture(Path(fr["file"]),
+                           resolve_at(fr["at"], fr.get("dy", 0.0)),
+                           fr.get("width", 0.9), fr.get("title", ""),
+                           font, plaque_mat, frame_mat, plate_text_mat)
+    # ボールが出てくる壁のポート
+    if "start_pos" in sc:
+        sp = sc["start_pos"]
+        add_ball_port((sp[0], WALL_Y, sp[1]), sc["ball_r"], plaque_mat)
+    if wall_cfg.get("frames"):
+        plaque_mat = make_material("plaque", (0.55, 0.45, 0.25, 1),
+                                   metallic=1.0, rough=0.35)
+        frame_mat = make_material("frame", (0.20, 0.19, 0.18, 1),
+                                  metallic=0.7, rough=0.45)
+        plate_text_mat = make_material("plaquetext", (0.16, 0.13, 0.08, 1),
+                                       rough=0.6)
+        for fr in wall_cfg["frames"]:
+            add_framed_picture(Path(fr["file"]),
+                               resolve_at(fr["at"], fr.get("dy", 0.0)),
+                               fr.get("width", 0.9), fr.get("title", ""),
+                               font, plaque_mat, frame_mat, plate_text_mat)
     faint_mat = make_material("wallnote", (0.47, 0.50, 0.56, 1), rough=0.85)
     glyphs = ["\u266a", "\u266b", "\u2669"]
     ys2 = [b[1] for b in sc["ball"]]
