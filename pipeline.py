@@ -54,8 +54,44 @@ def load_config(outdir: Path) -> dict:
 
 # ---------------------------------------------------------------- フェーズ1
 
+def list_tracks(midi: Path):
+    import pretty_midi
+    pm = pretty_midi.PrettyMIDI(str(midi))
+    rows = []
+    for i, inst in enumerate(pm.instruments):
+        if inst.is_drum or len(inst.notes) < 8:
+            continue
+        ps = [n.pitch for n in inst.notes]
+        name = pretty_midi.program_to_instrument_name(inst.program)
+        rows.append((i, name, len(inst.notes), min(ps), max(ps)))
+    return rows
+
+
 def cmd_audio(args):
     outdir = outdir_for(args.midi)
+
+    if args.track is None:
+        # 聴き比べモード: 全トラックを個別にMP3化する
+        tracks_dir = outdir / "tracks"
+        tracks_dir.mkdir(exist_ok=True)
+        rows = list_tracks(args.midi)
+        print(f"トラック指定がないので、候補{len(rows)}本を全部音にします:\n")
+        for i, name, n, lo, hi in rows:
+            out = tracks_dir / f"track{i}.mp3"
+            run([sys.executable, ROOT / "convert.py", args.midi,
+                 "--track", i, "--melody",
+                 "--min-pitch", args.min_pitch,
+                 "--min-velocity", args.min_velocity,
+                 "-i", args.instrument, "--octave", args.octave,
+                 "--reverb", args.reverb, "--sf2", SF2, "-o", out],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"  track{i}: {name:22s} {n:4d}音 音域{lo}-{hi} → {out}")
+        print("\n聴き比べ:")
+        for i, *_ in rows:
+            print(f"  ffplay -nodisp -autoexit {tracks_dir}/track{i}.mp3")
+        print(f"\n決めたら: uv run python pipeline.py audio {args.midi} --track <番号>")
+        return
+
     audio = outdir / "audio.mp3"
     run([sys.executable, ROOT / "convert.py", args.midi,
          "--track", args.track, "--melody",
@@ -126,7 +162,8 @@ def main():
 
     p = sub.add_parser("audio", help="1. 主旋律抽出+音源化(曲チェック)")
     p.add_argument("midi", type=Path)
-    p.add_argument("--track", type=int, default=0, help="メロディのトラック番号")
+    p.add_argument("--track", type=int, default=None,
+                   help="メロディのトラック番号(省略時: 全トラックを聴き比べ用に出力)")
     p.add_argument("--instrument", default="celesta",
                    help="音色: celesta/music_box/kalimba/harp/vibraphone/marimba等")
     p.add_argument("--octave", type=int, default=0, help="オクターブシフト")
