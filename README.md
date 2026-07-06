@@ -6,34 +6,35 @@ Instagramリール用動画(9:16)を自動生成するパイプライン。
 ## パイプライン
 
 ```
-MIDI(人が打ち込んだ譜面)
-  │ convert.py      … トラック選択+単音メロディ抽出+音色変換+リバーブ → MP3
-  │ make_video.py   … 物理シミュレーション+板/レール配置+衝突検証 → scene.json
-  │ blender_render.py … Blender(bpy+Eevee/Cycles)でフォトリアル描画 → 連番PNG
-  └ ffmpeg          … 音声と合成 → MP4
+input/曲.mid
+  │ convert.py        … トラック選択+単音メロディ抽出+音色変換+リバーブ → audio.mp3
+  │ make_video.py     … 物理シミュレーション+板/レール配置+衝突検証
+  │                      ├─ preview: 簡易3Dレンダラー(PIL) → preview.mp4 (数十秒)
+  │                      └─ final:   scene.json 書き出し
+  │ blender_render.py … Blender(bpy+Eevee/Cycles)フォトリアル描画 → frames/
+  └ ffmpeg            … 音声と合成 → final.mp4
+
+pipeline.py が上記を preview / final の2コマンドに束ねる
 ```
 
-## 使い方
+## 使い方(二段方式)
 
 ```bash
-# 1. 音源(チェレスタ+リバーブの単音メロディ)
-uv run python convert.py 曲.mid --track 1 --melody -i celesta --octave 0 \
-    --sf2 vendor/FluidR3_GM.sf2 -o 曲_audio.mp3
+# 1. MIDIを input/ に置く
 
-# 2. 経路計算+シーン書き出し(衝突検証付き)
-uv run python make_video.py 曲.mid --track 1 --audio 曲_audio.mp3 \
-    -o /dev/null --export scene.json
+# 2. プレビュー(簡易3D、数十秒で確認できる)
+uv run python pipeline.py preview input/曲.mid --track 1
+#    お試しは --duration 15 で先頭だけ
 
-# 3. Blenderレンダリング(Eevee: 約0.5-1秒/フレーム)
-vendor/bpy-venv/bin/python blender_render.py scene.json frames/ --engine eevee
-
-# 4. 音声と合成(delayはscene.jsonのaudio_delay_ms)
-ffmpeg -framerate 30 -i frames/f_%04d.png -i 曲_audio.mp3 \
-    -af "adelay=<ms>:all=1" -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
+# 3. 良ければフォトリアル仕上げ(Eevee、フル尺で20〜40分)
+uv run python pipeline.py final input/曲.mid --track 1
 ```
 
-`make_video.py --check` で衝突検証のみ実行。`--duration N` で先頭N秒だけ。
-`make_video.py` 単体でも簡易レンダラー(PIL)による確認動画を出力できる。
+出力は `output/<曲名>/` にまとまる:
+`audio.mp3`(音源) / `preview.mp4`(簡易3D) / `scene.json` / `frames/` / `final.mp4`
+
+音色などのオプション: `--instrument celesta --octave 0 --reverb 0.6`
+検証のみ: `uv run python make_video.py 曲.mid --track 1 --audio x -o /dev/null --check`
 
 ## 設計の要点
 

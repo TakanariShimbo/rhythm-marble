@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""入力MP3をオルゴール/鉄琴/マリンバ風のMP3に変換する。
+"""MIDIをオルゴール/チェレスタ/マリンバ等の音色のMP3に変換する。
 
 処理の流れ:
-  1. Basic Pitch (Spotify) で音源をMIDIに自動採譜
-  2. 全ノートを指定した音色(GM音源)に差し替え、必要ならオクターブシフト
-  3. FluidSynth + サウンドフォントでレンダリング
+  1. MIDIからトラック選択、必要なら単音メロディ抽出(--melody)
+  2. 指定した音色(GM音源)に差し替え、オクターブシフト
+  3. FluidSynth + サウンドフォントでレンダリング、リバーブ
   4. ffmpegでMP3出力
 
 使い方:
-  uv run python convert.py input.mp3 --instrument music_box
-  uv run python convert.py input.mp3 --instrument marimba -o out.mp3
+  uv run python convert.py input.mid --track 1 --melody -i celesta
 """
 
 import argparse
@@ -39,25 +38,6 @@ DEFAULT_OCTAVE = {
 
 DEFAULT_SF2 = "/usr/share/sounds/sf2/TimGM6mb.sf2"
 SAMPLE_RATE = 44100
-
-
-def transcribe(audio_path: Path, onset_threshold: float = 0.5,
-               min_note_ms: float = 128.0):
-    """Basic Pitchで音源をMIDI(pretty_midi)に採譜する。"""
-    from basic_pitch import ICASSP_2022_MODEL_PATH
-    from basic_pitch.inference import predict
-
-    print(f"[1/3] 採譜中: {audio_path}")
-    _, midi_data, _ = predict(
-        str(audio_path), ICASSP_2022_MODEL_PATH,
-        onset_threshold=onset_threshold,
-        minimum_note_length=min_note_ms,
-    )
-    n_notes = sum(len(inst.notes) for inst in midi_data.instruments)
-    print(f"      検出ノート数: {n_notes}")
-    if n_notes == 0:
-        sys.exit("エラー: ノートが検出できませんでした。入力音源を確認してください。")
-    return midi_data
 
 
 def extract_melody(midi_data, min_pitch: int = 0, group_ms: float = 80.0):
@@ -146,7 +126,7 @@ def render(midi_data, sf2_path: Path, out_mp3: Path, gain_db: float,
 def main():
     parser = argparse.ArgumentParser(
         description="MP3をオルゴール/鉄琴/マリンバ風のMP3に変換する")
-    parser.add_argument("input", type=Path, help="入力音源 (mp3/wav等)")
+    parser.add_argument("input", type=Path, help="入力MIDI (.mid)")
     parser.add_argument("-o", "--output", type=Path,
                         help="出力MP3パス (省略時: <入力名>_<音色>.mp3)")
     parser.add_argument("-i", "--instrument", choices=INSTRUMENTS,
@@ -163,10 +143,6 @@ def main():
                         help="主旋律だけを単音で抜き出す(動画同期向け)")
     parser.add_argument("--min-pitch", type=int, default=55,
                         help="--melody時にこれ未満の低音を捨てる (MIDIノート番号, デフォルト: 55=G3)")
-    parser.add_argument("--onset-threshold", type=float, default=0.5,
-                        help="採譜の音の拾いにくさ 0.1-0.9 (大きいほど音が減る, デフォルト: 0.5)")
-    parser.add_argument("--min-note-ms", type=float, default=128.0,
-                        help="これより短いノートを採譜しない (ms, デフォルト: 128)")
     parser.add_argument("--gain", type=float, default=0.0,
                         help="出力ゲイン調整dB (デフォルト: 0)")
     parser.add_argument("--reverb", type=float, default=0.6,
@@ -185,15 +161,14 @@ def main():
     octave = args.octave if args.octave is not None \
         else DEFAULT_OCTAVE.get(args.instrument, 0)
 
-    if args.input.suffix.lower() in (".mid", ".midi"):
-        import pretty_midi
-        midi_data = pretty_midi.PrettyMIDI(str(args.input))
-        if args.track is not None:
-            midi_data.instruments = [midi_data.instruments[args.track]]
-        print(f"[1/3] MIDI読み込み: {args.input} "
-              f"({sum(len(i.notes) for i in midi_data.instruments)}ノート)")
-    else:
-        midi_data = transcribe(args.input, args.onset_threshold, args.min_note_ms)
+    if args.input.suffix.lower() not in (".mid", ".midi"):
+        sys.exit("エラー: 入力はMIDIファイル(.mid)にしてください")
+    import pretty_midi
+    midi_data = pretty_midi.PrettyMIDI(str(args.input))
+    if args.track is not None:
+        midi_data.instruments = [midi_data.instruments[args.track]]
+    print(f"[1/3] MIDI読み込み: {args.input} "
+          f"({sum(len(i.notes) for i in midi_data.instruments)}ノート)")
     if args.melody:
         midi_data = extract_melody(midi_data, args.min_pitch)
     midi_data = restyle(midi_data, INSTRUMENTS[args.instrument],

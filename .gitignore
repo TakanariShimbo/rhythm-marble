@@ -1,5 +1,8 @@
 .venv/
 vendor/
+input/
+output/
 data/
+docs/reference.png
 __pycache__/
 *.pyc
