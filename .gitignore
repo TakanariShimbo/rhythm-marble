@@ -10,5 +10,4 @@ __pycache__/
 # フェーズ1/2/3の生成物(output/)はどのプロジェクトでもコミットしない
 data/*
 !data/twinkle-star/
-!data/pokemon-center-gs/
 data/*/output/
