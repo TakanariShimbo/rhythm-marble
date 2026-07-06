@@ -14,27 +14,26 @@ input/曲.mid
   │ blender_render.py … Blender(bpy+Eevee/Cycles)フォトリアル描画 → frames/
   └ ffmpeg            … 音声と合成 → final.mp4
 
-pipeline.py が上記を preview / final の2コマンドに束ねる
+pipeline.py が上記を audio / preview / final の3コマンドに束ねる
 ```
 
-## 使い方(二段方式)
+## 使い方(三段方式)
 
 ```bash
-# 1. MIDIを input/ に置く
+# フェーズ1: 主旋律抽出+音源化 → ここで曲チェック(耳で確認)
+uv run python pipeline.py audio input/曲.mid --track 1 --play
+#   音の変数: --instrument celesta --octave 0 --reverb 0.6
+#             --min-pitch 55 --min-velocity 48
 
-# 2. プレビュー(簡易3D、数十秒で確認できる)
-uv run python pipeline.py preview input/曲.mid --track 1
-#    お試しは --duration 15 で先頭だけ
+# フェーズ2: 簡易3Dで動きを確認(数十秒)
+uv run python pipeline.py preview input/曲.mid   # お試しは --duration 15
 
-# 3. 良ければフォトリアル仕上げ(Eevee、フル尺で20〜40分)
-uv run python pipeline.py final input/曲.mid --track 1
+# フェーズ3: フォトリアル仕上げ(Eevee、フル尺で20〜40分)
+uv run python pipeline.py final input/曲.mid
 ```
 
-出力は `output/<曲名>/` にまとまる:
-`audio.mp3`(音源) / `preview.mp4`(簡易3D) / `scene.json` / `frames/` / `final.mp4`
-
-音色などのオプション: `--instrument celesta --octave 0 --reverb 0.6`
-検証のみ: `uv run python make_video.py 曲.mid --track 1 --audio x -o /dev/null --check`
+フェーズ1の設定は `output/<曲名>/config.json` に保存され、2・3が引き継ぐ。
+出力: `audio.mp3`(音源) / `audio.mid`(抽出メロディ) / `preview.mp4` / `final.mp4`
 
 ## 設計の要点
 
