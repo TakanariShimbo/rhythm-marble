@@ -158,7 +158,7 @@ def gap_plan(t, p, v_out, dt_next, sx):
 
 # ---------------------------------------------------------------- 経路探索
 
-def build_path(bounces):
+def build_path(bounces, variant: int = 0):
     """物理シミュレーション+バックトラック探索で経路を作る。
 
     返り値:
@@ -168,6 +168,7 @@ def build_path(bounces):
       rails: [(t0, t1, a(3,), b(3,), u(3,), length)] 無音レール
     """
     e = RESTITUTION
+    rng = np.random.default_rng(variant)   # バリエーション: 同じ番号なら同じ結果
     v = fly(np.zeros(3), np.zeros(3), ENTRY_FALL)[1]
     p = np.zeros(3)
     tilts = np.radians(np.linspace(-MAX_TILT, MAX_TILT, 81))
@@ -200,6 +201,7 @@ def build_path(bounces):
         cands = -cand_normals if v[1] > 0 else cand_normals
         outs = v - (1.0 + e) * (cands @ v)[:, None] * cands
         score = np.abs(outs[:, 0] - vx_goal)
+        score += rng.uniform(0.0, 0.05, len(score))   # 同点候補のタイブレーク
         # 跳ね上げすぎる候補は避け、余剰エネルギーは横方向へ逃がす
         score += np.maximum(0.0, outs[:, 1] - VY_CAP) * 100.0
         # 板の表側から当たらない候補(すり抜け)は不可
@@ -316,7 +318,7 @@ def build_path(bounces):
     # 上から順に角度を決めていき、実行可能(制約違反ゼロ)な角度がない
     # バウンドに達したら、1つ前のバウンドへ戻って別の角度を試す。
     states = [None] * (N + 1)
-    states[0] = (p.copy(), v.copy(), 1.0, [], [], [])
+    states[0] = (p.copy(), v.copy(), float(rng.choice([-1.0, 1.0])), [], [], [])
     tried = [None] * N
     chosen = [None] * N
     compromises = []
@@ -848,6 +850,8 @@ def main():
     parser.add_argument("-o", "--output", type=Path, required=True, help="出力MP4")
     parser.add_argument("--duration", type=float, default=None,
                         help="先頭からこの秒数だけ描画(プレビュー用)")
+    parser.add_argument("--variant", type=int, default=0,
+                        help="配置のバリエーション番号(同じ番号は同じ配置を再現)")
     parser.add_argument("--check", action="store_true",
                         help="レンダリングせず衝突検証だけ実行する")
     parser.add_argument("--export", type=Path, default=None,
@@ -859,7 +863,7 @@ def main():
     if args.duration:
         end_time = min(end_time, args.duration)
         bounces = [b for b in bounces if b[0] <= end_time]
-    pts, pieces, normals, sizes, rails = build_path(bounces)
+    pts, pieces, normals, sizes, rails = build_path(bounces, args.variant)
     print(f"バウンド数: {len(pts)}, レール数: {len(rails)}, 長さ: {end_time:.1f}s")
 
     events = find_collisions(pts, pieces, normals, sizes, rails)
