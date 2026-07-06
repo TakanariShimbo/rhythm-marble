@@ -238,7 +238,7 @@ def build_path(bounces):
                       (np.abs(rel @ pd) < pw * 0.85 / 2 + BALL_R) &
                       ((rel @ pn) < BALL_R * 0.8) &
                       ((rel @ pn) > -PLAT_H - BALL_R))
-            score += inside.any(axis=1) * 1e3
+            score += inside.any(axis=1) * 1009  # (1)
             # (2) 次の板が既存の板とめり込む角度も不可
             # 既存の板は薄いので線分として扱い、次の板(向き未定)は
             # 着地点中心の円で近似して、点と線分の距離で判定する
@@ -251,7 +251,7 @@ def build_path(bounces):
                 tt = np.clip((c_new - a) @ ab / (ab @ ab), 0.0, 1.0)
                 near = a + tt[:, None] * ab[None, :]
                 d_land = np.linalg.norm(c_new - near, axis=1)
-                score += (d_land < w_next / 2 + PLAT_H + 0.03) * 5e2
+                score += (d_land < w_next / 2 + PLAT_H + 0.06) * 503  # (2)
 
         # (2b) いま跳ねている板(まだplaced未登録)と次の板の位置もめり込み不可
         u_self0 = np.stack([cands[:, 1], -cands[:, 0], np.zeros(len(cands))], axis=1)
@@ -264,7 +264,7 @@ def build_path(bounces):
                        np.einsum("kc,kc->k", ab_s, ab_s), 0.0, 1.0)
         near_s = a_s + tt_s[:, None] * ab_s
         d_s = np.linalg.norm(c_new2 - near_s, axis=1)
-        score += (d_s < w_next / 2 + PLAT_H + 0.03) * 5e2
+        score += (d_s < w_next / 2 + PLAT_H + 0.06) * 509  # (2b)
 
         # (3) 自分が今跳ねた板に再突入する角度は不可
         # 「板に近づく向きに動いている」サンプルだけを再突入とみなす
@@ -274,11 +274,12 @@ def build_path(bounces):
         pn_s = np.einsum("ktc,kc->kt", rel_s, cands)
         approaching = np.concatenate(
             [np.zeros((len(cands), 1), bool), np.diff(pn_s, axis=1) < 0], axis=1)
-        self_in = ((np.abs(pu_s) < w_plat / 2 + BALL_R * 0.9) &
-                   (np.abs(rel_s[:, :, 2]) < w_plat * 0.85 / 2 + BALL_R * 0.9) &
-                   (pn_s < BALL_R * 0.9) & (pn_s > -PLAT_H - BALL_R) &
+        # マージンは検証器(0.6R)と同基準にする(厳しすぎると探索が破綻する)
+        self_in = ((np.abs(pu_s) < w_plat / 2 + BALL_R * 0.6) &
+                   (np.abs(rel_s[:, :, 2]) < w_plat * 0.85 / 2 + BALL_R * 0.6) &
+                   (pn_s < BALL_R * 0.65) & (pn_s > -PLAT_H - BALL_R) &
                    approaching)
-        score += self_in.any(axis=1) * 1e3
+        score += self_in.any(axis=1) * 1013  # (3)
 
         # (4) 次の板は、それが表示される時間帯の確定済み軌道と重なってはいけない
         if hist_t:
@@ -287,9 +288,11 @@ def build_path(bounces):
             m = HT >= (t + dt_next) - PLAT_LEAD
             if m.any():
                 dd = np.linalg.norm(landing[:, None, :] - HP[m][None, :, :], axis=2)
-                score += (dd.min(axis=1) < w_next / 2 + BALL_R * 0.9) * 5e2
+                score += (dd.min(axis=1) < w_next / 2 + BALL_R * 0.9) * 521  # (4)
             # (5) 今置く板が、直前の進入経路(確定済み)に刺さる傾きは不可
-            m_in = (HT >= t - 0.7) & (HT <= t - 0.10)
+            # 除外は距離ベース: バウンド点の近傍は正当な最終アプローチ
+            m_in = ((HT >= t - 0.7) & (HT <= t - 0.02) &
+                    (np.linalg.norm(HP - p[None, :], axis=1) > BALL_R * 2.2))
             if m_in.any():
                 rel_i = HP[m_in][None, :, :] - c_self[:, None, :]
                 pu_i = np.einsum("kmc,kc->km", rel_i, u_self0)
@@ -297,7 +300,7 @@ def build_path(bounces):
                 in_i = ((np.abs(pu_i) < w_plat / 2 + BALL_R * 0.9) &
                         (np.abs(rel_i[:, :, 2]) < w_plat * 0.85 / 2 + BALL_R * 0.9) &
                         (pn_i < BALL_R * 0.9) & (pn_i > -PLAT_H - BALL_R * 0.5))
-                score += in_i.any(axis=1) * 1e3
+                score += in_i.any(axis=1) * 1019  # (5)
 
         # (6) 着地点に置かれる次の板を、飛行中に突き抜ける軌道は不可
         # (着地時に上昇中なら次の板は天井=箱は上、下降中なら床=下)
@@ -305,7 +308,7 @@ def build_path(bounces):
         box_cy = landing[:, 1] - np.sign(-land_vy) * (BALL_R + PLAT_H / 2)
         in_box = ((np.abs(q[:, :, 0] - landing[:, 0, None]) < w_next / 2 + BALL_R * 0.9) &
                   (np.abs(q[:, :, 1] - box_cy[:, None]) < PLAT_H / 2 + BALL_R * 0.9))
-        score += (in_box & early[None, :]).any(axis=1) * 5e2
+        score += (in_box & early[None, :]).any(axis=1) * 523  # (6)
 
         return score, cands, outs, q, ts, w_plat, dt_next, rails_c, landing, land_v
 
@@ -345,6 +348,8 @@ def build_path(bounces):
         best = int(order[min(ptr, len(order) - 1)])
         if score[best] >= FEASIBLE:
             compromises.append(i)
+            print(f"    [妥協詳細] バウンド{i}: 最良スコア={score[best]:.0f} "
+                  f"上位5候補={[int(x) for x in np.sort(score)[:5]]}")
         n = cands[best]
         v_out = outs[best]
         chosen[i] = (t, p_i.copy(), pitch, n, v_out.copy(), w_plat, sign,
