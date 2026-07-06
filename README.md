@@ -4,6 +4,14 @@
 
 MIDIの楽曲から「音に同期してビー玉がバウンドしながら落ちていく」動画(9:16, 1080×1920, 30fps)を自動生成するパイプライン。
 
+## デモ
+
+サンプルプロジェクト `data/twinkle-star/`(きらきら星)から生成した動画:
+
+<a href="https://youtube.com/shorts/8o9QeMwsXNY"><img src="https://img.youtube.com/vi/8o9QeMwsXNY/maxresdefault.jpg" width="270" alt="Twinkle, Twinkle, Little Star – Marble Music Box (YouTube Shorts)"></a>
+
+▶ https://youtube.com/shorts/8o9QeMwsXNY
+
 ## セットアップ
 
 ```bash
