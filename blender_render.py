@@ -24,6 +24,12 @@ from pathlib import Path
 import bpy
 
 
+def hex_rgb(h):
+    """"#RRGGBB" → (r, g, b) 0-1"""
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
 def to_b(v):
     """計算座標(x,y=上,z=奥) → Blender座標(x, y=奥, z=上)"""
     return (v[0], v[2], v[1])
@@ -59,8 +65,14 @@ def make_material(name, color, metallic=0.0, rough=0.4, transmission=0.0,
     return mat
 
 
-def make_marble(r):
-    """ガラスのビー玉: 外殻はガラス、内部に色の渦。"""
+def make_marble(r, band_colors=None):
+    """ガラスのビー玉: 外殻はガラス、内部に色の渦。
+
+    band_colors: 渦の色4つ [(r,g,b,1)×4]。未指定なら既定の配色。
+    """
+    if band_colors is None:
+        band_colors = [(0.95, 0.55, 0.10, 1), (0.15, 0.65, 0.35, 1),
+                       (0.15, 0.45, 0.85, 1), (0.9, 0.9, 0.95, 1)]
     bpy.ops.mesh.primitive_uv_sphere_add(radius=r, segments=48, ring_count=24)
     ball = bpy.context.object
     ball.name = "marble"
@@ -70,8 +82,8 @@ def make_marble(r):
 
     # 内部の色の渦: 2本のツイストした帯(本物のビー玉の作り)
     for k, (rot, cols) in enumerate([
-        (0.0, [(0.95, 0.55, 0.10, 1), (0.15, 0.65, 0.35, 1)]),
-        (math.radians(90), [(0.15, 0.45, 0.85, 1), (0.9, 0.9, 0.95, 1)]),
+        (0.0, band_colors[0:2]),
+        (math.radians(90), band_colors[2:4]),
     ]):
         bpy.ops.mesh.primitive_torus_add(major_radius=r * 0.34,
                                          minor_radius=r * 0.10,
@@ -622,25 +634,42 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
         gi += 1
         yy -= 3.8
 
-    # ---- 経路沿いの物理ライト(降下に沿って交互に点在、画面内に約2個) ----
+    # ---- 経路沿いの物理ライト(降下に沿って点在、色はプロジェクト設定) ----
+    light_cols = [hex_rgb(c) for c in wall_cfg.get("lights", [])] or \
+                 [(1.0, 0.85, 0.65), (0.65, 0.8, 1.0)]
+    light_energy = float(wall_cfg.get("lights_energy", 55))
     ys = [b[1] for b in sc["ball"]]
     y_top, y_bot = max(ys) + 1.0, min(ys) - 1.0
     i_l = 0
     y = y_top
     while y > y_bot:
         side = 1 if i_l % 2 == 0 else -1
-        warm = i_l % 2 == 0
+        # 経路から少し離して置く(近すぎるとパーツが白飛びする)
         bpy.ops.object.light_add(type="POINT",
-                                 location=(side * 1.7, -0.55, y))
+                                 location=(side * 2.2, -0.85, y))
         lp = bpy.context.object
-        lp.data.energy = 90
-        lp.data.shadow_soft_size = 0.25
-        lp.data.color = (1.0, 0.85, 0.65) if warm else (0.65, 0.8, 1.0)
+        lp.data.energy = light_energy
+        lp.data.shadow_soft_size = 0.3
+        lp.data.color = light_cols[i_l % len(light_cols)]
         i_l += 1
         y -= 3.4
 
-    # ---- ビー玉 ----
-    ball = make_marble(sc["ball_r"])
+    # ---- ビー玉(渦の色はプロジェクト設定、未指定ならライト色から導出) ----
+    mc = wall_cfg.get("marble_colors")
+    if mc:
+        band = [(*hex_rgb(c), 1.0) for c in (mc * 4)[:4]]
+    elif wall_cfg.get("lights"):
+        # ライト色から彩度を強めた濃い渦色を導出(淡色ライトでも映える)
+        base = [hex_rgb(c) for c in wall_cfg["lights"]]
+        band = []
+        for i in range(4):
+            h, sv, v = colorsys.rgb_to_hsv(*base[i % len(base)])
+            sv = min(1.0, sv * 2.6 + 0.15)
+            v = 0.78 if i < 2 else 0.5          # 2本目の帯は暗めでコントラスト
+            band.append((*colorsys.hsv_to_rgb(h, sv, v), 1.0))
+    else:
+        band = None
+    ball = make_marble(sc["ball_r"], band)
     spin = sc.get("spin", [0.0] * len(sc["ball"]))
     for f, p in enumerate(sc["ball"]):
         ball.location = to_b(p)
