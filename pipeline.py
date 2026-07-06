@@ -83,14 +83,19 @@ def cmd_audio(args):
         print(f"トラック指定がないので、候補{len(rows)}本を全部音にします:\n")
         for i, name, n, lo, hi in rows:
             out = tracks_dir / f"track{i}.mp3"
-            run([sys.executable, ROOT / "convert.py", args.midi,
+            r = subprocess.run(
+                [str(c) for c in [sys.executable, ROOT / "convert.py", args.midi,
                  "--track", i, "--melody",
                  "--min-pitch", args.min_pitch,
                  "--min-velocity", args.min_velocity,
                  "-i", args.instrument, "--octave", args.octave,
-                 "--reverb", args.reverb, "--sf2", SF2, "-o", out],
+                 "--reverb", args.reverb, "--sf2", SF2, "-o", out]],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print(f"  track{i}: {name:22s} {n:4d}音 音域{lo}-{hi} → {out}")
+            if r.returncode == 0:
+                print(f"  track{i}: {name:22s} {n:4d}音 音域{lo}-{hi} → {out}")
+            else:
+                print(f"  track{i}: {name:22s} {n:4d}音 音域{lo}-{hi} → スキップ"
+                      f"(メロディ抽出に失敗、低音のみ等)")
         print("\n聴き比べ:")
         for i, *_ in rows:
             print(f"  ffplay -nodisp -autoexit {tracks_dir}/track{i}.mp3")

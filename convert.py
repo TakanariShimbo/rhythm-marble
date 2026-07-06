@@ -64,6 +64,8 @@ def extract_melody(midi_data, min_pitch: int = 0, group_ms: float = 80.0):
         if a.end > b.start:
             a.end = b.start
 
+    if not kept:
+        sys.exit("エラー: メロディ抽出後のノートが0件です(--min-pitchが高すぎる等)")
     inst = midi_data.instruments[0]
     midi_data.instruments = [inst]
     inst.notes = kept
