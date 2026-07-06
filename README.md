@@ -17,23 +17,38 @@ input/曲.mid
 pipeline.py が上記を audio / preview / final の3コマンドに束ねる
 ```
 
-## 使い方(三段方式)
+## 使い方(プロジェクト方式・三段)
 
 ```bash
-# フェーズ1: 主旋律抽出+音源化 → ここで曲チェック(耳で確認)
-uv run python pipeline.py audio input/曲.mid --track 1 --play
-#   音の変数: --instrument celesta --octave 0 --reverb 0.6
-#             --min-pitch 55 --min-velocity 48
+# 0. プロジェクトを作る(サンプル: data/pokemon-center-gs)
+mkdir -p data/my-song/input
+cp 曲.mid data/my-song/input/song.mid
+#    任意: wall.json(壁の額・タイトル), 画像
 
-# フェーズ2: 簡易3Dで動きを確認(数十秒)
-uv run python pipeline.py preview input/曲.mid   # お試しは --duration 15
+# 1. 主旋律抽出+音源化 → 曲チェック(トラック未指定なら全トラック聴き比べ)
+uv run python pipeline.py audio data/my-song --track 1 --play
+#    音の変数: --instrument celesta --octave 0 --reverb 0.6
 
-# フェーズ3: フォトリアル仕上げ(Eevee、フル尺で20〜40分)
-uv run python pipeline.py final input/曲.mid
+# 2. 簡易3Dで動き確認(数十秒)
+uv run python pipeline.py preview data/my-song
+
+# 3. フォトリアル仕上げ(Eevee、フル尺で20〜40分)
+uv run python pipeline.py final data/my-song
 ```
 
-フェーズ1の設定は `output/<曲名>/config.json` に保存され、2・3が引き継ぐ。
-出力: `audio.mp3`(音源) / `audio.mid`(抽出メロディ) / `preview.mp4` / `final.mp4`
+生成物はすべて `data/my-song/output/` に入る。
+gitにはサンプルプロジェクトのinputのみコミットされる(他プロジェクトは対象外)。
+
+### wall.json(壁の演出)
+
+```json
+{
+  "texts":  [{"text": "タイトル\n2行目", "at": "start", "dy": -0.72, "size": 0.155}],
+  "frames": [{"file": "artwork.jpg", "at": "start", "dy": 1.0, "width": 0.95}]
+}
+```
+額(frames)はどんな画像もそのまま飾れる。テキストはメタリックブラックの刻印。
+導入は「何もない壁が割れてビー玉が出てくる」演出(0秒フレーム=サムネイル)。
 
 ## 設計の要点
 

@@ -1,8 +1,12 @@
 .venv/
 vendor/
-input/
-output/
-data/
 docs/reference.png
 __pycache__/
 *.pyc
+/*.mp4
+/*.png
+
+# プロジェクトデータはサンプル(pokemon-center-gs)のinputのみコミットする
+data/*
+!data/pokemon-center-gs/
+data/pokemon-center-gs/output/

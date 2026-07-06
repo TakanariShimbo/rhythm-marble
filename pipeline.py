@@ -5,21 +5,18 @@
   2. preview: 簡易3Dレンダラーで動きを確認(数十秒)
   3. final:   Blender(Eevee)でフォトリアルに仕上げる(フル尺で20〜40分)
 
+プロジェクト方式: data/<プロジェクト名>/ の中で入力と出力を分ける。
+
+  data/my-song/
+    input/    ユーザーが置く: song.mid(必須), wall.json, 画像など
+    output/   生成物: audio.mp3, preview.mp4, final.mp4 など
+
 使い方:
-  uv run python pipeline.py audio   input/曲.mid --track 1 [--instrument celesta --reverb 0.6] [--play]
-  uv run python pipeline.py preview input/曲.mid [--duration 15]
-  uv run python pipeline.py final   input/曲.mid
+  uv run python pipeline.py audio   data/my-song [--track 1] [--play]
+  uv run python pipeline.py preview data/my-song [--duration 15]
+  uv run python pipeline.py final   data/my-song
 
-audioで指定した設定(トラック・音色など)は output/<曲名>/config.json に
-保存され、preview / final はそれを引き継ぐ。
-
-出力は output/<曲名>/ にまとまる:
-  audio.mp3    音源(曲チェック用にして最終版の音)
-  audio.mid    抽出された単音メロディMIDI(参考)
-  config.json  フェーズ1で決めた設定
-  preview.mp4  簡易3D確認動画
-  frames/      Blenderの連番PNG
-  final.mp4    完成動画
+audioで指定した設定はoutput/config.jsonに保存され、preview/finalが引き継ぐ。
 """
 
 import argparse
@@ -38,17 +35,24 @@ def run(cmd, **kw):
     subprocess.run([str(c) for c in cmd], check=True, **kw)
 
 
-def outdir_for(midi: Path) -> Path:
-    d = ROOT / "output" / midi.stem
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def resolve_project(project: Path):
+    """プロジェクトdirから(midi, indir, outdir)を得る。"""
+    indir = project / "input"
+    mids = sorted(indir.glob("*.mid")) + sorted(indir.glob("*.midi"))
+    if not mids:
+        sys.exit(f"エラー: {indir} に .mid がありません")
+    if len(mids) > 1:
+        print(f"注意: MIDIが複数あるため {mids[0].name} を使います")
+    outdir = project / "output"
+    outdir.mkdir(parents=True, exist_ok=True)
+    return mids[0], indir, outdir
 
 
 def load_config(outdir: Path) -> dict:
     cfg = outdir / "config.json"
     if not cfg.exists():
         sys.exit(f"エラー: 先にフェーズ1を実行してください:\n"
-                 f"  uv run python pipeline.py audio input/{outdir.name}.mid --track N")
+                 f"  uv run python pipeline.py audio {outdir.parent} --track N")
     return json.loads(cfg.read_text())
 
 
@@ -68,7 +72,8 @@ def list_tracks(midi: Path):
 
 
 def cmd_audio(args):
-    outdir = outdir_for(args.midi)
+    midi, indir, outdir = resolve_project(args.project)
+    args.midi = midi
 
     if args.track is None:
         # 聴き比べモード: 全トラックを個別にMP3化する
@@ -89,7 +94,7 @@ def cmd_audio(args):
         print("\n聴き比べ:")
         for i, *_ in rows:
             print(f"  ffplay -nodisp -autoexit {tracks_dir}/track{i}.mp3")
-        print(f"\n決めたら: uv run python pipeline.py audio {args.midi} --track <番号>")
+        print(f"\n決めたら: uv run python pipeline.py audio {args.project} --track <番号>")
         return
 
     audio = outdir / "audio.mp3"
@@ -110,7 +115,7 @@ def cmd_audio(args):
     }, ensure_ascii=False, indent=2))
     print(f"\nフェーズ1完了: {audio}")
     print("曲チェック: ffplay -nodisp -autoexit " + str(audio))
-    print(f"良ければ: uv run python pipeline.py preview {args.midi}")
+    print(f"良ければ: uv run python pipeline.py preview {args.project}")
     if args.play:
         subprocess.run(["ffplay", "-nodisp", "-autoexit", "-loglevel", "error",
                         str(audio)])
@@ -127,24 +132,27 @@ def mv_args(midi: Path, cfg: dict, args):
 
 
 def cmd_preview(args):
-    outdir = outdir_for(args.midi)
+    midi, indir, outdir = resolve_project(args.project)
     cfg = load_config(outdir)
     out = outdir / "preview.mp4"
-    run(mv_args(args.midi, cfg, args) + ["--audio", outdir / "audio.mp3",
-                                         "-o", out])
+    run(mv_args(midi, cfg, args) + ["--audio", outdir / "audio.mp3",
+                                    "-o", out])
     print(f"\nフェーズ2完了: {out}")
-    print(f"良ければ: uv run python pipeline.py final {args.midi}")
+    print(f"良ければ: uv run python pipeline.py final {args.project}")
 
 
 def cmd_final(args):
-    outdir = outdir_for(args.midi)
+    midi, indir, outdir = resolve_project(args.project)
     cfg = load_config(outdir)
     scene = outdir / "scene.json"
-    run(mv_args(args.midi, cfg, args) + ["--audio", outdir / "audio.mp3",
-                                         "-o", "/dev/null", "--export", scene])
+    run(mv_args(midi, cfg, args) + ["--audio", outdir / "audio.mp3",
+                                    "-o", "/dev/null", "--export", scene])
     frames = outdir / "frames"
-    run([BPY, ROOT / "blender_render.py", scene, frames,
-         "--engine", args.engine, "--samples", args.samples])
+    br = [BPY, ROOT / "blender_render.py", scene, frames,
+          "--engine", args.engine, "--samples", args.samples]
+    if (indir / "wall.json").exists():
+        br += ["--wall", indir / "wall.json"]
+    run(br)
     delay = json.loads(scene.read_text())["audio_delay_ms"]
     out = outdir / "final.mp4"
     run(["ffmpeg", "-y", "-loglevel", "error",
@@ -161,7 +169,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("audio", help="1. 主旋律抽出+音源化(曲チェック)")
-    p.add_argument("midi", type=Path)
+    p.add_argument("project", type=Path, help="プロジェクトdir (data/〜)")
     p.add_argument("--track", type=int, default=None,
                    help="メロディのトラック番号(省略時: 全トラックを聴き比べ用に出力)")
     p.add_argument("--instrument", default="celesta",
@@ -179,7 +187,7 @@ def main():
     for name, fn, help_ in [("preview", cmd_preview, "2. 簡易3Dで動き確認"),
                             ("final", cmd_final, "3. フォトリアル仕上げ")]:
         p = sub.add_parser(name, help=help_)
-        p.add_argument("midi", type=Path)
+        p.add_argument("project", type=Path, help="プロジェクトdir (data/〜)")
         p.add_argument("--duration", type=float, default=None,
                        help="先頭N秒だけ(お試し用)")
         if name == "final":
@@ -189,8 +197,8 @@ def main():
         p.set_defaults(fn=fn)
 
     args = ap.parse_args()
-    if not args.midi.exists():
-        sys.exit(f"エラー: {args.midi} が見つかりません")
+    if not args.project.exists():
+        sys.exit(f"エラー: {args.project} が見つかりません")
     args.fn(args)
 
 

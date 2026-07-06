@@ -48,7 +48,7 @@ PLAT_H = 0.03                # 板の厚さ (m)。極薄
 PLAT_LIFE = 1.2              # 板が着地後に消えるまでの時間 (s)
 PLAT_LEAD = 1.2              # 板が着地の何秒前に現れるか (s)
 ENTRY_FALL = 1.5             # 最初の板に当たる前の落下時間 (s)。静止から落ちる導入部
-EMERGE_T = 1.3               # 壁の穴からボールが出てくる演出の時間 (s)
+EMERGE_T = 1.1               # 壁が割れてボールが出てくる演出の時間 (s)
 WALL_DEPTH = 0.25            # 壁の奥行き位置(Blender側のWALL_Yと一致させる)
 
 GAP_MAX = 0.75               # ノート間隔がこれを超えたらレールで転がす (s)
@@ -404,12 +404,11 @@ def ball_pos(pts, pieces, t):
             # 自由落下フェーズ
             tau = t - fall_begin
             return start + fly(np.zeros(3), np.zeros(3), tau)[0]
-        # 出現フェーズ: 蓋が開くのを待ってから(+0.45s)、暗い穴の奥から
-        # 滑らかに出てくる。最後に一拍(0.25s)置いて落下へ
-        s_ = np.clip((t - (fall_begin - EMERGE_T) - 0.45) /
-                     (EMERGE_T - 0.45 - 0.25), 0.0, 1.0)
+        # 出現フェーズ: 壁が割れるのを待って(+0.5s)、奥からシュッと
+        # 出てくる(0.35s)。一拍(0.25s)置いて落下へ
+        s_ = np.clip((t - (fall_begin - EMERGE_T) - 0.5) / 0.35, 0.0, 1.0)
         ease = s_ * s_ * (3 - 2 * s_)   # smoothstep
-        z = (WALL_DEPTH + 0.06) * (1.0 - ease)
+        z = (WALL_DEPTH + BALL_R + 0.06) * (1.0 - ease)  # 開始時は完全に壁の中
         return start + np.array([0.0, 0.0, z])
     return path_pos(pieces, t)
 

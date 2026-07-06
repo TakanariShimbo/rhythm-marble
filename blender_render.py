@@ -419,50 +419,41 @@ def add_framed_picture(path, location, width, title, font, plaque_mat,
         txt.data.space_line = 1.3
 
 
-def add_ball_port(location, ball_r, ring_mat, fps):
-    """ボールが出てくる壁の丸いポート。
+def add_wall_hatch(location, ball_r, wall_mat, fps):
+    """何もない壁が左右にパカッと割れてボールが出てくるハッチ。
 
-    最初は金属の蓋で閉じていて、開始直後にアイリス状にスッと開き、
-    暗い穴が現れる(蓋のスケールをキーフレームで0に)。
+    パネルは壁と同じマテリアル(スクリーン座標グラデーション)なので
+    閉じている間は壁に完全に溶け込み、動いた瞬間に割れ目が現れる。
     """
     x, y, z = location
-    bpy.ops.mesh.primitive_torus_add(major_radius=ball_r * 1.22,
-                                     minor_radius=0.018,
-                                     major_segments=48, minor_segments=16)
-    ring = bpy.context.object
-    ring.rotation_euler = (math.radians(90), 0, 0)
-    ring.location = (x, y - 0.012, z)
-    ring.data.materials.append(ring_mat)
-    dark = bpy.data.materials.new("port_hole")
+    ow, oh = ball_r * 2.9, ball_r * 3.1     # 開口部のサイズ
+    # 暗い奥(穴の見た目)
+    dark = bpy.data.materials.new("hatch_dark")
     dark.use_nodes = True
     db = dark.node_tree.nodes["Principled BSDF"]
-    db.inputs["Base Color"].default_value = (0.015, 0.015, 0.02, 1)
-    db.inputs["Roughness"].default_value = 0.9
-    bpy.ops.mesh.primitive_cylinder_add(radius=ball_r * 1.12, depth=0.006,
-                                        vertices=48)
+    db.inputs["Base Color"].default_value = (0.012, 0.012, 0.016, 1)
+    db.inputs["Roughness"].default_value = 0.95
+    bpy.ops.mesh.primitive_plane_add(size=1)
     hole = bpy.context.object
+    hole.scale = (ow, oh, 1)
     hole.rotation_euler = (math.radians(90), 0, 0)
-    hole.location = (x, y - 0.004, z)
+    hole.location = (x, y - 0.002, z)
     hole.data.materials.append(dark)
-    # 蓋(閉→開)
-    cover_mat = bpy.data.materials.new("port_cover")
-    cover_mat.use_nodes = True
-    cb = cover_mat.node_tree.nodes["Principled BSDF"]
-    cb.inputs["Base Color"].default_value = (0.42, 0.42, 0.44, 1)
-    cb.inputs["Metallic"].default_value = 0.9
-    cb.inputs["Roughness"].default_value = 0.45
-    bpy.ops.mesh.primitive_cylinder_add(radius=ball_r * 1.14, depth=0.008,
-                                        vertices=48)
-    cover = bpy.context.object
-    cover.rotation_euler = (math.radians(90), 0, 0)
-    cover.location = (x, y - 0.009, z)
-    cover.data.materials.append(cover_mat)
-    f_open0 = int(0.10 * fps)      # 開き始め
-    f_open1 = int(0.45 * fps)      # 開き切り
-    cover.scale = (1, 1, 1)
-    cover.keyframe_insert("scale", frame=f_open0)
-    cover.scale = (0.001, 0.001, 0.001)
-    cover.keyframe_insert("scale", frame=f_open1)
+    # 左右のパネル(壁と同じマテリアル=閉じていれば見えない)
+    pw = ow / 2 + 0.02
+    f0 = int(0.12 * fps)
+    f1 = int(0.50 * fps)
+    for side in (-1, 1):
+        bpy.ops.mesh.primitive_cube_add(size=1)
+        pnl = bpy.context.object
+        pnl.scale = (pw, 0.002, oh + 0.04)
+        base_x = x + side * pw / 2
+        pnl.location = (base_x, y - 0.003, z)    # 壁とほぼ面一(枠が見えないように)
+        pnl.data.materials.append(wall_mat)
+        pnl.keyframe_insert("location", frame=f0)
+        # 引き戸のように横へ滑りつつ壁の奥へ沈んで消える
+        pnl.location = (base_x + side * (pw * 0.95), y + 0.03, z)
+        pnl.keyframe_insert("location", frame=f1)
 
 
 def keyframe_visibility(ob, f_in, f_out, fps):
@@ -558,7 +549,8 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
         font = bpy.data.fonts.load(JP_FONT)
     except Exception:
         pass
-    text_mat = make_material("walltext", (0.30, 0.33, 0.40, 1), rough=0.75)
+    text_mat = make_material("walltext", (0.035, 0.035, 0.045, 1),
+                             metallic=0.85, rough=0.35)   # メタリックブラック
 
     def resolve_at(at, dy=0.0):
         """配置指定: "start"=壁の穴の位置 / "first_plate"=最初の板 / [x, y]"""
@@ -579,35 +571,41 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     for tx in wall_cfg.get("texts", []):
         add_wall_text(tx["text"], resolve_at(tx["at"], tx.get("dy", 0.0)),
                       tx.get("size", 0.30), text_mat, font)
+    wall_dir = Path(wall_cfg.get("_dir", "."))
+
+    def wall_file(f):
+        q = Path(f)
+        return q if q.is_absolute() or q.exists() else wall_dir / q
+
     for im in wall_cfg.get("images", []):
-        add_wall_image(Path(im["file"]),
+        add_wall_image(wall_file(im["file"]),
                        resolve_at(im["at"], im.get("dy", 0.0)),
                        im.get("width", 0.8), im.get("opacity", 0.85),
                        im.get("desaturate", 0.35))
     plaque_mat = make_material("plaque", (0.55, 0.45, 0.25, 1),
                                metallic=1.0, rough=0.35)
     for fr in wall_cfg.get("frames", []):
-        frame_mat = make_material("frame", (0.20, 0.19, 0.18, 1),
-                                  metallic=0.7, rough=0.45)
+        frame_mat = make_material("frame", (0.06, 0.06, 0.07, 1),
+                                  metallic=0.85, rough=0.35)
         plate_text_mat = make_material("plaquetext", (0.16, 0.13, 0.08, 1),
                                        rough=0.6)
-        add_framed_picture(Path(fr["file"]),
+        add_framed_picture(wall_file(fr["file"]),
                            resolve_at(fr["at"], fr.get("dy", 0.0)),
                            fr.get("width", 0.9), fr.get("title", ""),
                            font, plaque_mat, frame_mat, plate_text_mat)
     # ボールが出てくる壁のポート
     if "start_pos" in sc:
         sp = sc["start_pos"]
-        add_ball_port((sp[0], WALL_Y, sp[1]), sc["ball_r"], plaque_mat, fps)
+        add_wall_hatch((sp[0], WALL_Y, sp[1]), sc["ball_r"], wall_mat, fps)
     if wall_cfg.get("frames"):
         plaque_mat = make_material("plaque", (0.55, 0.45, 0.25, 1),
                                    metallic=1.0, rough=0.35)
-        frame_mat = make_material("frame", (0.20, 0.19, 0.18, 1),
-                                  metallic=0.7, rough=0.45)
+        frame_mat = make_material("frame", (0.06, 0.06, 0.07, 1),
+                                  metallic=0.85, rough=0.35)
         plate_text_mat = make_material("plaquetext", (0.16, 0.13, 0.08, 1),
                                        rough=0.6)
         for fr in wall_cfg["frames"]:
-            add_framed_picture(Path(fr["file"]),
+            add_framed_picture(wall_file(fr["file"]),
                                resolve_at(fr["at"], fr.get("dy", 0.0)),
                                fr.get("width", 0.9), fr.get("title", ""),
                                font, plaque_mat, frame_mat, plate_text_mat)
@@ -750,12 +748,15 @@ def main():
     ap.add_argument("--samples", type=int, default=48)
     ap.add_argument("--engine", choices=["eevee", "cycles"], default="eevee",
                     help="eevee=高速(既定) / cycles=最高品質")
+    ap.add_argument("--wall", type=Path, default=None,
+                    help="壁コンテンツwall.jsonのパス(省略時: scene.jsonと同じ場所)")
     args = ap.parse_args()
 
     sc = json.loads(args.scene.read_text())
-    wall_path = args.scene.parent / "wall.json"
+    wall_path = args.wall or (args.scene.parent / "wall.json")
     if wall_path.exists():
         sc["wall"] = json.loads(wall_path.read_text())
+        sc["wall"]["_dir"] = str(wall_path.parent)
         print(f"壁コンテンツ: {wall_path}")
     args.outdir.mkdir(parents=True, exist_ok=True)
     objs = build_scene(sc, args.engine, args.samples, args.scale)
