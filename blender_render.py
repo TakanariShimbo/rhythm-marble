@@ -395,9 +395,17 @@ def add_framed_picture(path, location, width, title, font, plaque_mat,
         b.data.materials.append(frame_mat)
 
     if title:
-        ph = 0.16
-        pw = max(0.62, 0.058 * max(len(l) for l in title.split("\n")))
-        pz = z - fh / 2 - bar - 0.15
+        # 銘板は行数と最長行に合わせて動的にサイズを決める
+        lines = title.split("\n")
+        longest = max(len(l) for l in lines)
+        ts = 0.075                                   # 基本の文字サイズ
+        max_w = max(fw * 0.95, 0.7)                  # 額の幅に収める
+        if ts * longest * 0.98 > max_w:
+            ts = max(0.048, max_w / (longest * 0.98))
+        line_h = ts * 1.45
+        ph = line_h * len(lines) + 0.07
+        pw = ts * longest * 0.98 + 0.14
+        pz = z - fh / 2 - bar - 0.10 - ph / 2
         bpy.ops.mesh.primitive_cube_add(size=1)
         pl = bpy.context.object
         pl.scale = (pw, 0.012, ph)
@@ -406,12 +414,17 @@ def add_framed_picture(path, location, width, title, font, plaque_mat,
         bev.width = 0.006
         bev.segments = 2
         pl.data.materials.append(plaque_mat)
-        add_wall_text(title, (x, y - 0.014, pz), 0.045, text_mat, font,
-                      extrude=0.002)
+        txt = add_wall_text(title, (x, y - 0.014, pz), ts, text_mat, font,
+                            extrude=0.002)
+        txt.data.space_line = 1.3
 
 
-def add_ball_port(location, ball_r, ring_mat):
-    """ボールが出てくる壁の丸いポート(真鍮リング+暗い穴)。"""
+def add_ball_port(location, ball_r, ring_mat, fps):
+    """ボールが出てくる壁の丸いポート。
+
+    最初は金属の蓋で閉じていて、開始直後にアイリス状にスッと開き、
+    暗い穴が現れる(蓋のスケールをキーフレームで0に)。
+    """
     x, y, z = location
     bpy.ops.mesh.primitive_torus_add(major_radius=ball_r * 1.22,
                                      minor_radius=0.018,
@@ -431,6 +444,25 @@ def add_ball_port(location, ball_r, ring_mat):
     hole.rotation_euler = (math.radians(90), 0, 0)
     hole.location = (x, y - 0.004, z)
     hole.data.materials.append(dark)
+    # 蓋(閉→開)
+    cover_mat = bpy.data.materials.new("port_cover")
+    cover_mat.use_nodes = True
+    cb = cover_mat.node_tree.nodes["Principled BSDF"]
+    cb.inputs["Base Color"].default_value = (0.42, 0.42, 0.44, 1)
+    cb.inputs["Metallic"].default_value = 0.9
+    cb.inputs["Roughness"].default_value = 0.45
+    bpy.ops.mesh.primitive_cylinder_add(radius=ball_r * 1.14, depth=0.008,
+                                        vertices=48)
+    cover = bpy.context.object
+    cover.rotation_euler = (math.radians(90), 0, 0)
+    cover.location = (x, y - 0.009, z)
+    cover.data.materials.append(cover_mat)
+    f_open0 = int(0.10 * fps)      # 開き始め
+    f_open1 = int(0.45 * fps)      # 開き切り
+    cover.scale = (1, 1, 1)
+    cover.keyframe_insert("scale", frame=f_open0)
+    cover.scale = (0.001, 0.001, 0.001)
+    cover.keyframe_insert("scale", frame=f_open1)
 
 
 def keyframe_visibility(ob, f_in, f_out, fps):
@@ -566,7 +598,7 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     # ボールが出てくる壁のポート
     if "start_pos" in sc:
         sp = sc["start_pos"]
-        add_ball_port((sp[0], WALL_Y, sp[1]), sc["ball_r"], plaque_mat)
+        add_ball_port((sp[0], WALL_Y, sp[1]), sc["ball_r"], plaque_mat, fps)
     if wall_cfg.get("frames"):
         plaque_mat = make_material("plaque", (0.55, 0.45, 0.25, 1),
                                    metallic=1.0, rough=0.35)

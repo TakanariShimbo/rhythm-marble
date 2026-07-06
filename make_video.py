@@ -404,8 +404,10 @@ def ball_pos(pts, pieces, t):
             # 自由落下フェーズ
             tau = t - fall_begin
             return start + fly(np.zeros(3), np.zeros(3), tau)[0]
-        # 出現フェーズ: 壁の中から滑らかに出てくる(最後に一拍置く)
-        s_ = np.clip((t - (fall_begin - EMERGE_T)) / (EMERGE_T - 0.35), 0.0, 1.0)
+        # 出現フェーズ: 蓋が開くのを待ってから(+0.45s)、暗い穴の奥から
+        # 滑らかに出てくる。最後に一拍(0.25s)置いて落下へ
+        s_ = np.clip((t - (fall_begin - EMERGE_T) - 0.45) /
+                     (EMERGE_T - 0.45 - 0.25), 0.0, 1.0)
         ease = s_ * s_ * (3 - 2 * s_)   # smoothstep
         z = (WALL_DEPTH + 0.06) * (1.0 - ease)
         return start + np.array([0.0, 0.0, z])
