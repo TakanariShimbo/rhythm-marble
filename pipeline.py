@@ -119,11 +119,8 @@ def cmd_audio(args):
 # ---------------------------------------------------------------- フェーズ2/3
 
 def mv_args(midi: Path, cfg: dict, args):
-    variant = getattr(args, "variant", None)
-    if variant is None:
-        variant = cfg.get("variant", 0)
     mv = [sys.executable, ROOT / "make_video.py", midi,
-          "--track", cfg["track"], "--variant", variant]
+          "--track", cfg["track"]]
     if args.duration:
         mv += ["--duration", args.duration]
     return mv
@@ -135,11 +132,8 @@ def cmd_preview(args):
     out = outdir / "preview.mp4"
     run(mv_args(args.midi, cfg, args) + ["--audio", outdir / "audio.mp3",
                                          "-o", out])
-    cfg["variant"] = args.variant if args.variant is not None else cfg.get("variant", 0)
-    (outdir / "config.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
-    print(f"\nフェーズ2完了: {out} (variant={cfg['variant']})")
-    print(f"配置が気に入らなければ: uv run python pipeline.py preview {args.midi} --variant {cfg['variant'] + 1}")
-    print(f"良ければ(同じ配置でフォトリアル化): uv run python pipeline.py final {args.midi}")
+    print(f"\nフェーズ2完了: {out}")
+    print(f"良ければ: uv run python pipeline.py final {args.midi}")
 
 
 def cmd_final(args):
@@ -188,9 +182,6 @@ def main():
         p.add_argument("midi", type=Path)
         p.add_argument("--duration", type=float, default=None,
                        help="先頭N秒だけ(お試し用)")
-        if name == "preview":
-            p.add_argument("--variant", type=int, default=None,
-                           help="配置バリエーション番号(気に入るまで変えられる)")
         if name == "final":
             p.add_argument("--engine", choices=["eevee", "cycles"],
                            default="eevee")
