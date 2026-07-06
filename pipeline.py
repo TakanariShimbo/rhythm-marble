@@ -88,6 +88,8 @@ def cmd_audio(args):
                  "--track", i, "--melody",
                  "--min-pitch", args.min_pitch,
                  "--min-velocity", args.min_velocity,
+                 "--long-note", args.long_note,
+                 "--long-note-len", args.long_note_len,
                  "-i", args.instrument, "--octave", args.octave,
                  "--reverb", args.reverb, "--sf2", SF2, "-o", out]],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -107,6 +109,8 @@ def cmd_audio(args):
          "--track", args.track, "--melody",
          "--min-pitch", args.min_pitch,
          "--min-velocity", args.min_velocity,
+         "--long-note", args.long_note,
+         "--long-note-len", args.long_note_len,
          "-i", args.instrument, "--octave", args.octave,
          "--reverb", args.reverb, "--sf2", SF2,
          "--save-midi", "-o", audio])
@@ -117,6 +121,8 @@ def cmd_audio(args):
         "reverb": args.reverb,
         "min_pitch": args.min_pitch,
         "min_velocity": args.min_velocity,
+        "long_note": args.long_note,
+        "long_note_len": args.long_note_len,
     }, ensure_ascii=False, indent=2))
     print(f"\nフェーズ1完了: {audio}")
     print("曲チェック: ffplay -nodisp -autoexit " + str(audio))
@@ -130,7 +136,9 @@ def cmd_audio(args):
 
 def mv_args(midi: Path, cfg: dict, args):
     mv = [sys.executable, ROOT / "make_video.py", midi,
-          "--track", cfg["track"]]
+          "--track", cfg["track"],
+          "--long-note", cfg.get("long_note", "keep"),
+          "--long-note-len", cfg.get("long_note_len", 0.5)]
     if args.duration:
         mv += ["--duration", args.duration]
     return mv
@@ -177,8 +185,9 @@ def main():
 
     p = sub.add_parser("audio", help="1. 主旋律抽出+音源化(曲チェック)")
     p.add_argument("project", type=Path, help="プロジェクトdir (data/〜)")
-    p.add_argument("--track", type=int, default=None,
-                   help="メロディのトラック番号(省略時: 全トラックを聴き比べ用に出力)")
+    p.add_argument("--track", type=str, default=None,
+                   help="メロディのトラック番号。カンマ区切りで複数合成可 (例: 0,2,5)。"
+                        "省略時: 全トラックを聴き比べ用に出力")
     p.add_argument("--instrument", default="celesta",
                    help="音色: celesta/music_box/kalimba/harp/vibraphone/marimba等")
     p.add_argument("--octave", type=int, default=0, help="オクターブシフト")
@@ -188,6 +197,12 @@ def main():
                    help="これ未満の低音を捨てる(MIDIノート番号)")
     p.add_argument("--min-velocity", type=int, default=48,
                    help="弱いノートの底上げ")
+    p.add_argument("--long-note", choices=["keep", "cut", "split"],
+                   default="keep",
+                   help="長い音の扱い: keep=そのまま / cut=切り詰め / "
+                        "split=トレモロ風に刻む(動画のバウンドも増える)")
+    p.add_argument("--long-note-len", type=float, default=0.5,
+                   help="長音の閾値秒数(cutの上限、splitの刻み間隔。デフォルト: 0.5)")
     p.add_argument("--play", action="store_true", help="生成後すぐ再生する")
     p.set_defaults(fn=cmd_audio)
 

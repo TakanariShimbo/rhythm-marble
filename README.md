@@ -26,7 +26,14 @@ cp どこかの曲.mid data/my-song/input/song.mid
 
 1プロジェクト=1曲。`input/` に置くのは MIDI(必須)と、任意で
 `wall.json`・画像(額に飾るアートワーク)。生成物はすべて `output/` に入る。
-サンプル: `data/pokemon-center-gs/`
+サンプル: `data/twinkle-star/`(きらきら星)
+
+```bash
+# サンプルをそのまま動かす
+uv run python pipeline.py audio   data/twinkle-star --track 0 --instrument music_box
+uv run python pipeline.py preview data/twinkle-star
+uv run python pipeline.py final   data/twinkle-star
+```
 
 ### 1. audio — 主旋律抽出+音源化(耳でチェック)
 
@@ -49,6 +56,11 @@ uv run python pipeline.py audio data/my-song --track 4 --play
 | `--reverb` | 0.6 | 残響量 0-1(0で無効)。心地よさの要 |
 | `--min-pitch` | 55 | これ未満の低音を捨てる(伴奏・ベース除去) |
 | `--min-velocity` | 48 | 弱いノートの底上げ |
+| `--long-note` | keep | 長い音の扱い: keep=そのまま / cut=切り詰め / split=トレモロ風に刻む(動画のバウンドも増える) |
+| `--long-note-len` | 0.5 | 長音の閾値秒数(cutの上限、splitの刻み間隔) |
+
+自動で行われる整形: タイ(前の音に食い込んで続く同音ノート)の結合、
+曲頭の無音カット。どちらも音源と動画で同じ処理を通るため同期は保たれる。
 
 出力: `audio.mp3`(音源) / `audio.mid`(抽出された単音メロディ、確認用)
 
@@ -81,20 +93,24 @@ Blender(Eevee)でレンダリングして `output/final.mp4` を出力。
 ```json
 {
   "texts": [
-    {"text": "ポケットモンスター金銀\nポケモンセンター",
-     "at": "start", "dy": -0.72, "size": 0.155}
+    {"text": "Twinkle, Twinkle,\nLittle Star",
+     "at": "start", "dy": -0.75, "size": 0.155}
   ],
   "frames": [
-    {"file": "artwork.jpg", "at": "start", "dy": 1.0, "width": 0.95}
-  ]
+    {"file": "starry_sky.jpg", "at": "start", "dy": 0.95, "width": 0.95}
+  ],
+  "lights": ["#fff3cc", "#8fa8e0"],
+  "marble_colors": ["#1c3a73", "#ffd98c", "#e8f0ff", "#0e1f4d"]
 }
 ```
 
 - `frames` = 額に入れて壁に飾る画像。**どんな画像でもそのまま使える**
   (切り抜き不要)。`title`を付けると額の下に真鍮の銘板が付く
 - `texts` = 壁に直接刻印されるメタリックブラックの文字(`\n`で複数行可)
-- `at`: `"start"`(ビー玉が出てくる壁の位置) / `"first_plate"` / `[x, y]`座標
+- `at`: `"start"`(ビー玉が出てくる壁の位置) / `"end"` / `"first_plate"` / `[x, y]`座標
 - `dy`: 上下オフセット(m) / `size`: 文字の高さ(m) / `width`: 額の画像幅(m)
+- `lights`: 経路沿いの照明色(HEX、交互に配置) / `marble_colors`: ビー玉の渦の色4つ
+  (未指定ならライト色から自動導出)
 
 構図の目安: 額(`dy +1.0`)/ 壁割れハッチ(start)/ タイトル(`dy -0.72`)で
 0秒フレームがサムネイルとして成立する。
@@ -150,7 +166,7 @@ make_video.py        物理+配置+検証+簡易レンダラー(フェーズ2の
 blender_render.py    フォトリアル描画(フェーズ3の中身)
 setup.sh             vendor/ と .venv の再構築
 data/<プロジェクト>/  input/(ユーザー) と output/(生成物)
-data/pokemon-center-gs/  サンプルプロジェクト(inputのみgit管理)
+data/twinkle-star/   サンプルプロジェクト(inputのみgit管理)
 vendor/              Blender(bpy)とサウンドフォント(git対象外・再構築可)
 ```
 

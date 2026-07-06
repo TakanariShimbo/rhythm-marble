@@ -60,6 +60,18 @@ def extract_melody(midi_data, min_pitch: int = 0, group_ms: float = 80.0):
         if kept and kept[-1].end > n.start and kept[-1].pitch > n.pitch:
             continue  # 上のメロディが鳴っている最中の下の伴奏音は捨てる
         kept.append(n)
+    # タイ(同音で前の音に食い込んで続くノート)は1音に結合する。
+    # 打楽器系の音色では2打目が余計な音として鳴ってしまうため。
+    # 隙間0で隣接するのは同音連打(きらきら星のドド等)なので結合しない。
+    merged = []
+    for n in kept:
+        if merged and n.pitch == merged[-1].pitch \
+                and n.start < merged[-1].end - 0.01:
+            merged[-1].end = max(merged[-1].end, n.end)
+            continue
+        merged.append(n)
+    kept = merged
+
     for a, b in zip(kept, kept[1:]):
         if a.end > b.start:
             a.end = b.start
@@ -70,6 +82,66 @@ def extract_melody(midi_data, min_pitch: int = 0, group_ms: float = 80.0):
     midi_data.instruments = [inst]
     inst.notes = kept
     print(f"      メロディ抽出後: {len(kept)}ノート")
+    return midi_data
+
+
+def process_long_notes(midi_data, mode: str, max_len: float):
+    """max_lenより長いノートの扱いを決める。
+
+    keep:  そのまま(従来どおり)
+    cut:   max_lenで切り詰める(残響で自然に減衰)
+    split: オルゴールのトレモロ風にmax_len間隔で刻み直す。
+           動画側も同じ処理を通るので、刻んだ分だけバウンドが増えて同期する。
+    """
+    if mode == "keep":
+        return midi_data
+    import copy
+    n_hit = 0
+    for inst in midi_data.instruments:
+        new_notes = []
+        for n in inst.notes:
+            dur = n.end - n.start
+            if dur <= max_len:
+                new_notes.append(n)
+                continue
+            n_hit += 1
+            if mode == "cut":
+                n.end = n.start + max_len
+                new_notes.append(n)
+            else:  # split
+                t, vel = n.start, n.velocity
+                while t < n.end - 1e-6:
+                    seg = copy.copy(n)
+                    seg.start = t
+                    seg.end = min(t + max_len, n.end)
+                    seg.velocity = max(1, int(vel))
+                    new_notes.append(seg)
+                    vel *= 0.82  # 繰り返すほど減衰させてトレモロらしく
+                    t += max_len
+        inst.notes = sorted(new_notes, key=lambda x: x.start)
+    if n_hit:
+        print(f"      長音処理({mode}, {max_len}s超 {n_hit}音): "
+              f"計{sum(len(i.notes) for i in midi_data.instruments)}ノート")
+    return midi_data
+
+
+def trim_leading_silence(midi_data):
+    """曲頭の無音をカットする(最初のノートが0秒から始まるように全体をずらす)。
+
+    音源と動画の両方で同じ処理を通すことで同期が保たれる。
+    中間の無音はそのまま残す。
+    """
+    starts = [n.start for inst in midi_data.instruments for n in inst.notes]
+    if not starts:
+        return midi_data
+    shift = min(starts)
+    if shift <= 0.01:
+        return midi_data
+    for inst in midi_data.instruments:
+        for n in inst.notes:
+            n.start -= shift
+            n.end -= shift
+    print(f"      曲頭の無音カット: {shift:.2f}s")
     return midi_data
 
 
@@ -139,12 +211,18 @@ def main():
                         help="サウンドフォント(.sf2)のパス")
     parser.add_argument("--min-velocity", type=int, default=48,
                         help="ノートの最小ベロシティ (デフォルト: 48)")
-    parser.add_argument("--track", type=int, default=None,
-                        help="MIDI入力時に使うトラック番号 (省略時: 全トラック)")
+    parser.add_argument("--track", type=str, default=None,
+                        help="使うトラック番号。カンマ区切りで複数可 (例: 0,2,5)")
     parser.add_argument("--melody", action="store_true",
                         help="主旋律だけを単音で抜き出す(動画同期向け)")
     parser.add_argument("--min-pitch", type=int, default=55,
                         help="--melody時にこれ未満の低音を捨てる (MIDIノート番号, デフォルト: 55=G3)")
+    parser.add_argument("--long-note", choices=["keep", "cut", "split"],
+                        default="keep",
+                        help="長い音の扱い: keep=そのまま / cut=切り詰め / "
+                             "split=トレモロ風に刻む (デフォルト: keep)")
+    parser.add_argument("--long-note-len", type=float, default=0.5,
+                        help="長音とみなす秒数(cutの上限、splitの刻み間隔。デフォルト: 0.5)")
     parser.add_argument("--gain", type=float, default=0.0,
                         help="出力ゲイン調整dB (デフォルト: 0)")
     parser.add_argument("--reverb", type=float, default=0.6,
@@ -168,11 +246,15 @@ def main():
     import pretty_midi
     midi_data = pretty_midi.PrettyMIDI(str(args.input))
     if args.track is not None:
-        midi_data.instruments = [midi_data.instruments[args.track]]
+        idx = [int(x) for x in str(args.track).split(",")]
+        midi_data.instruments = [midi_data.instruments[i] for i in idx]
     print(f"[1/3] MIDI読み込み: {args.input} "
           f"({sum(len(i.notes) for i in midi_data.instruments)}ノート)")
     if args.melody:
         midi_data = extract_melody(midi_data, args.min_pitch)
+    midi_data = process_long_notes(midi_data, args.long_note,
+                                   args.long_note_len)
+    midi_data = trim_leading_silence(midi_data)
     midi_data = restyle(midi_data, INSTRUMENTS[args.instrument],
                         octave, args.min_velocity)
 

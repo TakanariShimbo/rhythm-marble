@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from convert import extract_melody
+from convert import extract_melody, process_long_notes, trim_leading_silence
 
 W, H = 1080, 1920            # 9:16 リール解像度
 TITLE = "ポケモンセンター"     # 壁に表示する曲名
@@ -69,12 +69,15 @@ LIGHT_DIR = LIGHT_DIR / np.linalg.norm(LIGHT_DIR)
 
 # ---------------------------------------------------------------- 物理
 
-def load_bounces(midi_path: Path, track: int):
+def load_bounces(midi_path: Path, track, long_note="keep", long_note_len=0.5):
     import pretty_midi
     pm = pretty_midi.PrettyMIDI(str(midi_path))
     if track is not None:
-        pm.instruments = [pm.instruments[track]]
+        idx = [int(x) for x in str(track).split(",")]
+        pm.instruments = [pm.instruments[i] for i in idx]
     pm = extract_melody(pm, min_pitch=0)
+    pm = process_long_notes(pm, long_note, long_note_len)
+    pm = trim_leading_silence(pm)
     notes = sorted(pm.instruments[0].notes, key=lambda n: n.start)
     return [(n.start, n.pitch) for n in notes]
 
@@ -928,18 +931,25 @@ def export_scene(pts, pieces, normals, sizes, rails, output: Path,
 def main():
     parser = argparse.ArgumentParser(description="メロディ同期3D落下ボール動画を生成")
     parser.add_argument("midi", type=Path, help="メロディMIDI")
-    parser.add_argument("--track", type=int, default=None, help="使用トラック番号")
+    parser.add_argument("--track", type=str, default=None,
+                        help="使用トラック番号(カンマ区切りで複数可)")
     parser.add_argument("--audio", type=Path, required=True, help="重ねる音声(MP3)")
     parser.add_argument("-o", "--output", type=Path, required=True, help="出力MP4")
     parser.add_argument("--duration", type=float, default=None,
                         help="先頭からこの秒数だけ描画(プレビュー用)")
+    parser.add_argument("--long-note", choices=["keep", "cut", "split"],
+                        default="keep",
+                        help="長い音の扱い(音源と同じ設定にすること)")
+    parser.add_argument("--long-note-len", type=float, default=0.5,
+                        help="長音の閾値秒数(音源と同じ設定にすること)")
     parser.add_argument("--check", action="store_true",
                         help="レンダリングせず衝突検証だけ実行する")
     parser.add_argument("--export", type=Path, default=None,
                         help="Blender用シーンJSONを書き出して終了する")
     args = parser.parse_args()
 
-    bounces = load_bounces(args.midi, args.track)
+    bounces = load_bounces(args.midi, args.track,
+                           args.long_note, args.long_note_len)
     end_time = bounces[-1][0]
     if args.duration:
         end_time = min(end_time, args.duration)

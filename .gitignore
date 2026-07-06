@@ -6,8 +6,9 @@ __pycache__/
 /*.mp4
 /*.png
 
-# プロジェクトデータはサンプル(pokemon-center-gs)のinputのみコミットする
+# プロジェクトデータはサンプル(twinkle-star)のinputのみコミットする
 # フェーズ1/2/3の生成物(output/)はどのプロジェクトでもコミットしない
 data/*
+!data/twinkle-star/
 !data/pokemon-center-gs/
 data/*/output/

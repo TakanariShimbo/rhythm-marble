@@ -1,0 +1,42 @@
+{
+  "texts": [
+    {
+      "text": "Twinkle, Twinkle,\nLittle Star",
+      "at": "start",
+      "dy": -0.75,
+      "size": 0.155
+    },
+    {
+      "text": "Twinkle, Twinkle,\nLittle Star",
+      "at": "end",
+      "dy": -0.75,
+      "size": 0.155
+    }
+  ],
+  "frames": [
+    {
+      "file": "starry_sky.jpg",
+      "at": "start",
+      "dy": 0.95,
+      "width": 0.95,
+      "title": ""
+    },
+    {
+      "file": "starry_sky.jpg",
+      "at": "end",
+      "dy": 0.95,
+      "width": 0.95,
+      "title": ""
+    }
+  ],
+  "lights": [
+    "#fff3cc",
+    "#8fa8e0"
+  ],
+  "marble_colors": [
+    "#1c3a73",
+    "#ffd98c",
+    "#e8f0ff",
+    "#0e1f4d"
+  ]
+}
