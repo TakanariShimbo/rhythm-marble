@@ -231,6 +231,43 @@ def add_wall_text(text, location, size, mat, font=None, extrude=0.004, tilt=0.0)
     return ob
 
 
+def add_wall_image(path, location, width, opacity=0.85, desaturate=0.35):
+    """画像を壁に「印刷/ペイントした風」に貼る。
+
+    背景透過PNG推奨。マットな質感+彩度控えめ+半透明で壁の色が透け、
+    貼り紙ではなく壁面に描かれたように見せる。
+    """
+    img = bpy.data.images.load(str(path))
+    aspect = img.size[1] / img.size[0]
+    bpy.ops.mesh.primitive_plane_add(size=1)
+    ob = bpy.context.object
+    ob.name = f"wallimg_{path.stem}"
+    ob.scale = (width, width * aspect, 1)
+    ob.rotation_euler = (math.radians(90), 0, 0)
+    ob.location = location
+
+    mat = bpy.data.materials.new(f"wallimg_{path.stem}")
+    mat.use_nodes = True
+    nt = mat.node_tree
+    bsdf = nt.nodes["Principled BSDF"]
+    tex = nt.nodes.new("ShaderNodeTexImage")
+    tex.image = img
+    hsv = nt.nodes.new("ShaderNodeHueSaturation")
+    hsv.inputs["Saturation"].default_value = 1.0 - desaturate
+    nt.links.new(tex.outputs["Color"], hsv.inputs["Color"])
+    nt.links.new(hsv.outputs["Color"], bsdf.inputs["Base Color"])
+    math_n = nt.nodes.new("ShaderNodeMath")
+    math_n.operation = "MULTIPLY"
+    math_n.inputs[1].default_value = opacity
+    nt.links.new(tex.outputs["Alpha"], math_n.inputs[0])
+    nt.links.new(math_n.outputs["Value"], bsdf.inputs["Alpha"])
+    bsdf.inputs["Roughness"].default_value = 0.9
+    if hasattr(mat, "blend_method"):
+        mat.blend_method = "BLEND"
+    ob.data.materials.append(mat)
+    return ob
+
+
 def keyframe_visibility(ob, f_in, f_out, fps):
     """スケールで出現/消滅を表現する(0.25秒でポップイン/アウト)。"""
     pop = max(2, int(0.25 * fps))
@@ -318,19 +355,38 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     fill.data.size = 4.0
     fill.rotation_euler = (math.radians(95), 0, math.radians(35))
 
-    # ---- 壁のタイトルと音符の装飾 ----
-    title = sc.get("title")
+    # ---- 壁のコンテンツ(wall.jsonで自由指定、無ければタイトルのみ) ----
     font = None
     try:
         font = bpy.data.fonts.load(JP_FONT)
     except Exception:
         pass
     text_mat = make_material("walltext", (0.30, 0.33, 0.40, 1), rough=0.75)
-    if title:
-        # 最初の板の少し上: 導入の落下〜最初の音の間、画面に留まる位置
-        p0 = sc["plates"][0]["pos"]
-        add_wall_text(title, (p0[0], WALL_Y - 0.012, p0[1] + 0.72),
-                      0.30, text_mat, font)
+
+    def resolve_at(at, dy=0.0):
+        """配置指定: "start"=落下開始位置 / "first_plate"=最初の板 / [x, y]"""
+        if at == "start":
+            b0 = sc["ball"][0]
+            return (b0[0], WALL_Y - 0.012, b0[1] + dy)
+        if at == "first_plate":
+            p0 = sc["plates"][0]["pos"]
+            return (p0[0], WALL_Y - 0.012, p0[1] + 0.72 + dy)
+        return (at[0], WALL_Y - 0.012, at[1] + dy)
+
+    wall_cfg = sc.get("wall")
+    if not wall_cfg:
+        title = sc.get("title")
+        wall_cfg = {"texts": ([{"text": title, "at": "start", "dy": -0.55},
+                               {"text": title, "at": "first_plate"}]
+                              if title else [])}
+    for tx in wall_cfg.get("texts", []):
+        add_wall_text(tx["text"], resolve_at(tx["at"], tx.get("dy", 0.0)),
+                      tx.get("size", 0.30), text_mat, font)
+    for im in wall_cfg.get("images", []):
+        add_wall_image(Path(im["file"]),
+                       resolve_at(im["at"], im.get("dy", 0.0)),
+                       im.get("width", 0.8), im.get("opacity", 0.85),
+                       im.get("desaturate", 0.35))
     faint_mat = make_material("wallnote", (0.47, 0.50, 0.56, 1), rough=0.85)
     glyphs = ["\u266a", "\u266b", "\u2669"]
     ys2 = [b[1] for b in sc["ball"]]
@@ -473,6 +529,10 @@ def main():
     args = ap.parse_args()
 
     sc = json.loads(args.scene.read_text())
+    wall_path = args.scene.parent / "wall.json"
+    if wall_path.exists():
+        sc["wall"] = json.loads(wall_path.read_text())
+        print(f"壁コンテンツ: {wall_path}")
     args.outdir.mkdir(parents=True, exist_ok=True)
     objs = build_scene(sc, args.engine, args.samples, args.scale)
     n_frames = objs["n_frames"]
