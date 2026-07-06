@@ -47,9 +47,12 @@ PLAT_W = 0.18                # 板の横幅 (m)。全板で固定
 PLAT_H = 0.03                # 板の厚さ (m)。極薄
 PLAT_LIFE = 1.2              # 板が着地後に消えるまでの時間 (s)
 PLAT_LEAD = 1.2              # 板が着地の何秒前に現れるか (s)
-ENTRY_FALL = 1.5             # 最初の板に当たる前の落下時間 (s)。静止から落ちる導入部
-EMERGE_T = 1.1               # 壁が割れてボールが出てくる演出の時間 (s)
-WALL_DEPTH = 0.25            # 壁の奥行き位置(Blender側のWALL_Yと一致させる)
+# ループ演出「振り子の頂点」: 終わりは上りレールを登り切って速度ゼロ、
+# 始まりは同じ(見た目の)位置から転がり落ちる。継ぎ目は折り返しの一瞬
+# なので、位置も速度(ゼロ)も構図も完全に一致する。
+ENTRY_V = 1.4                # 入場レール離脱時の速度 (m/s)
+ENTRY_TF = 0.75              # レール離脱→最初の板への飛行時間 (s)
+EXIT_TF = 0.35               # 最後の板→出口レールへの飛行時間 (s)
 
 GAP_MAX = 0.75               # ノート間隔がこれを超えたらレールで転がす (s)
 RAIL_SLOPE = np.radians(12)  # レールの傾斜角
@@ -106,13 +109,41 @@ def roll_state(v0, s):
     return dist, vel
 
 
+def roll_up(v0, s):
+    """上り勾配EXIT_SLOPEのレールを転がり減速する。(距離, 速度)。
+
+    dv/dt = -g sinα - k v の閉形式解。停止後は頂点に留まる(そこが継ぎ目)。
+    """
+    k = G / DRAG_VT
+    va = G * np.sin(RAIL_SLOPE) / k
+    t_stop = np.log((v0 + va) / va) / k
+    s = np.minimum(np.asarray(s, dtype=float), t_stop)
+    ek = np.exp(-k * s)
+    vel = (v0 + va) * ek - va
+    dist = ((v0 + va) / k) * (1.0 - ek) - va * s
+    return dist, vel
+
+
+def roll_up_stop(v0):
+    """上り転がりが停止するまでの(時間, 距離)。"""
+    k = G / DRAG_VT
+    va = G * np.sin(RAIL_SLOPE) / k
+    t_stop = float(np.log((v0 + va) / va) / k)
+    d, _ = roll_up(v0, t_stop)
+    return t_stop, float(d)
+
+
 def piece_pos(piece, t):
     """区間(飛行 or 転がり)内の時刻tのボール位置。"""
     if piece[0] == "fly":
         _, t0, t1, p0, v0 = piece
         return fly(p0, v0, t - t0)[0]
-    _, t0, t1, p0, u, v0s = piece
-    d, _ = roll_state(v0s, t - t0)
+    if piece[0] == "roll":
+        _, t0, t1, p0, u, v0s = piece
+        d, _ = roll_state(v0s, t - t0)
+        return p0 + u * float(d)
+    _, t0, t1, p0, u, v0s = piece          # "rollu": 上り減速
+    d, _ = roll_up(v0s, t - t0)
     return p0 + u * float(d)
 
 
@@ -170,7 +201,9 @@ def build_path(bounces):
       rails: [(t0, t1, a(3,), b(3,), u(3,), length)] 無音レール
     """
     e = RESTITUTION
-    v = fly(np.zeros(3), np.zeros(3), ENTRY_FALL)[1]
+    # 最初の板への入射速度 = 入場レール離脱(ENTRY_V)後にENTRY_TF飛行した速度
+    u_in0 = np.array([-np.cos(RAIL_SLOPE), -np.sin(RAIL_SLOPE), 0.0])
+    v = fly(np.zeros(3), u_in0 * ENTRY_V, ENTRY_TF)[1]
     p = np.zeros(3)
     tilts = np.radians(np.linspace(-MAX_TILT, MAX_TILT, 81))
     cand_normals = np.stack([np.sin(tilts), np.cos(tilts), np.zeros_like(tilts)],
@@ -187,6 +220,10 @@ def build_path(bounces):
         dt_next = (bounces[i + 1][0] - t) if i < N - 1 else 1.0
         gap = dt_next > GAP_MAX and i < N - 1
         fast = dt_next < 0.35
+        if i == N - 1:
+            # 最後のバウンド: 出口レール(+x方向)に乗る向きへ跳ねさせる
+            sign = 1.0
+            fast = False
         if fast:
             # 速い連打: 方向転換の余地がないので流れに沿わせ、
             # 目標横速度も現在速度から達成可能な範囲に抑える
@@ -377,6 +414,24 @@ def build_path(bounces):
 
     # 確定した選択から出力を組み立てる
     pts, pieces, normals, sizes, rails = [], [], [], [], []
+
+    # ---- 入場: レールの頂点(静止)から左下へ転がり落ちる(振り子の出発) ----
+    t0_note = bounces[0][0]
+    u_in = np.array([-np.cos(RAIL_SLOPE), -np.sin(RAIL_SLOPE), 0.0])
+    v_exit = u_in * ENTRY_V
+    disp = fly(np.zeros(3), v_exit, ENTRY_TF)[0]
+    E = chosen[0][1] - disp                      # レール離脱点
+    k_ = G / DRAG_VT
+    vt_roll = DRAG_VT * np.sin(RAIL_SLOPE)
+    t_roll = float(-np.log(1.0 - ENTRY_V / vt_roll) / k_)
+    d_roll = float(roll_state(0.0, t_roll)[0])
+    S = E - u_in * d_roll                        # 頂点(最初のフレーム, v=0)
+    t_exit = t0_note - ENTRY_TF
+    pieces.append(("roll", t_exit - t_roll, t_exit, S, u_in, 0.0))
+    pieces.append(("fly", t_exit, t0_note, E, v_exit))
+    rails.append((t_exit - t_roll - 2.0, t_exit,
+                  S - u_in * 0.45, E + u_in * 0.05, u_in, d_roll + 0.5))
+
     for i, (t, p_i, pitch, n, v_out, w_plat, sgn, is_gap) in enumerate(chosen):
         pts.append((t, p_i, pitch))
         normals.append(n)
@@ -390,26 +445,24 @@ def build_path(bounces):
             else:
                 pieces.append(("fly", t, bounces[i + 1][0], p_i, v_out))
         else:
-            pieces.append(("fly", t, t + 10.0, p_i, v_out))
+            # ---- 出口: 落下→右上がりレールに乗り、減速して頂点で静止(継ぎ目) ----
+            pieces.append(("fly", t, t + EXIT_TF, p_i, v_out))
+            R0, v_arr = fly(p_i, v_out, EXIT_TF)
+            u_up = np.array([np.cos(RAIL_SLOPE), np.sin(RAIL_SLOPE), 0.0])
+            v0s = max(0.35, float(v_arr @ u_up))
+            t_stop, d_stop = roll_up_stop(v0s)
+            pieces.append(("rollu", t + EXIT_TF, t + EXIT_TF + t_stop + 1.0,
+                           R0, u_up, v0s))
+            # レールは着地点の下にも延長して、入場側と同じ見た目にする
+            rails.append((t + EXIT_TF - 0.6, t + EXIT_TF + t_stop + 1.0,
+                          R0 - u_up * 1.7, R0 + u_up * (d_stop + 0.45),
+                          u_up, d_stop + 2.15))
     return pts, pieces, normals, sizes, rails
 
 
 def ball_pos(pts, pieces, t):
-    t0, p0, _ = pts[0]
-    if t <= t0:
-        drop_end = fly(np.zeros(3), np.zeros(3), ENTRY_FALL)[0]
-        start = p0 - drop_end          # 落下開始位置(壁の穴の位置)
-        fall_begin = t0 - ENTRY_FALL
-        if t >= fall_begin:
-            # 自由落下フェーズ
-            tau = t - fall_begin
-            return start + fly(np.zeros(3), np.zeros(3), tau)[0]
-        # 出現フェーズ: 壁が割れるのを待って(+0.5s)、奥からシュッと
-        # 出てくる(0.35s)。一拍(0.25s)置いて落下へ
-        s_ = np.clip((t - (fall_begin - EMERGE_T) - 0.5) / 0.35, 0.0, 1.0)
-        ease = s_ * s_ * (3 - 2 * s_)   # smoothstep
-        z = (WALL_DEPTH + BALL_R + 0.06) * (1.0 - ease)  # 開始時は完全に壁の中
-        return start + np.array([0.0, 0.0, z])
+    if t <= pieces[0][1]:
+        return pieces[0][3].copy()     # 開始前: 入場レール上で静止(暗闇の中)
     return path_pos(pieces, t)
 
 
@@ -421,7 +474,7 @@ def find_collisions(pts, pieces, normals, sizes, rails):
     軌道を240Hzでサンプリングし、表示時間帯にボールが板・レールへ
     食い込んでいる区間、および板同士・レールとの箱交差(SAT)を列挙する。
     """
-    end_t = pts[-1][0] + 1.0
+    end_t = pieces[-1][2]
     ts_all, ps_all = [], []
     for pc in pieces:
         t0, t1 = pc[1], min(pc[2], end_t)
@@ -462,7 +515,7 @@ def find_collisions(pts, pieces, normals, sizes, rails):
                   ((rel @ nr) < margin) &
                   ((rel @ nr) > -RAIL_H - margin) &
                   (T > r0 - PLAT_LEAD) & (T < r1 + PLAT_LIFE) &
-                  ((T < r0 - 0.05) | (T > r1 + 0.1)))
+                  ((T < r0 - 0.3) | (T > r1 + 0.6)))   # 進入/離脱の自レールかすりは正当
         if inside.any():
             tt = T[inside]
             events.append((ridx, "レール", float(tt.min()), float(tt.max()), 0.0))
@@ -564,7 +617,7 @@ class Camera:
 
         # 速いほど引く(ゆっくり変化)
         want = float(np.clip(4.2 + speed * 0.32, 4.2, 6.6))
-        self.dist += (want - self.dist) * 0.04
+        self.dist += (want - self.dist) * 0.10
 
         off = self.OFFSET_DIR / np.linalg.norm(self.OFFSET_DIR)
         self.pos = self.smooth + off * self.dist
@@ -714,10 +767,9 @@ def make_background():
 
 def render(pts, pieces, normals, sizes, rails, audio: Path, output: Path,
            end_time: float):
-    # 最初のノートのENTRY_FALL秒前(ボール静止)から動画を始め、
-    # 音声はその分だけ遅らせて重ねる(無音の落下導入部)
-    t_start = pts[0][0] - ENTRY_FALL - EMERGE_T
-    total = end_time + 1.5
+    # 継ぎ目: 開始=入場レールの頂点(v=0)、終了=出口レールの頂点(v=0)
+    t_start = pieces[0][1]
+    total = pieces[-1][2] - 1.0 + 0.70   # 頂点で0.7秒の溜め(カメラも収束)
     n_frames = int((total - t_start) * FPS)
     delay_ms = int(round(max(0.0, -t_start) * 1000))
     bg = make_background()
@@ -727,19 +779,26 @@ def render(pts, pieces, normals, sizes, rails, audio: Path, output: Path,
         ["ffmpeg", "-y", "-loglevel", "error",
          "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS),
          "-i", "-", "-i", str(audio),
-         "-af", f"adelay={delay_ms}:all=1",
+         "-af", f"adelay={delay_ms}:all=1,apad",
+         "-t", f"{n_frames / FPS:.3f}",
          "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest",
+         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
          str(output)],
         stdin=subprocess.PIPE,
     )
 
     cam = Camera(ball_pos(pts, pieces, t_start))
+    for _ in range(150):
+        cam.update(ball_pos(pts, pieces, t_start))   # 暖機: 収束状態から開始
     trail = []
+    settle_t = pieces[-1][2] - 1.0        # 頂点到達時刻(以降は溜め)
     for f in range(n_frames):
         t = t_start + f / FPS
         bp = ball_pos(pts, pieces, t)
         cam.update(bp)
+        if t >= settle_t:                 # 溜め中はカメラを素早く据わらせる
+            for _ in range(3):
+                cam.update(bp)
 
         frame = bg.copy()
         draw = ImageDraw.Draw(frame, "RGBA")
@@ -789,18 +848,24 @@ def export_scene(pts, pieces, normals, sizes, rails, output: Path,
     Blender側は物理を知らなくてよい。
     """
     import json
-    t_start = pts[0][0] - ENTRY_FALL - EMERGE_T
-    total = end_time + 1.5
+    t_start = pieces[0][1]
+    total = pieces[-1][2] - 1.0 + 0.70
     n_frames = int((total - t_start) * FPS)
     cam = Camera(ball_pos(pts, pieces, t_start))
+    for _ in range(150):
+        cam.update(ball_pos(pts, pieces, t_start))   # 暖機: 収束状態から開始
     ball_track, cam_track, spin_track = [], [], []
     theta = 0.0
     omega = 0.0
     prev = None
+    settle_t = pieces[-1][2] - 1.0
     for f in range(n_frames):
         t = t_start + f / FPS
         bp = ball_pos(pts, pieces, t)
         cam.update(bp)
+        if t >= settle_t:
+            for _ in range(3):
+                cam.update(bp)
         ball_track.append([float(x) for x in bp])
         cam_track.append({"pos": [float(x) for x in cam.pos],
                           "look": [float(x) for x in cam.look]})
@@ -821,16 +886,21 @@ def export_scene(pts, pieces, normals, sizes, rails, output: Path,
             theta += omega / FPS
         spin_track.append(theta)
         prev = bp
-    p0 = pts[0][1]
-    drop_end = fly(np.zeros(3), np.zeros(3), ENTRY_FALL)[0]
-    start_pos = (p0 - drop_end).tolist()
+    start_pos = pieces[0][3]                     # 入場の頂点(=最初のフレーム)
+    end_piece = pieces[-1]                        # 出口レールの登り
+    _, d_stop_ = roll_up_stop(end_piece[5])
+    seam_pos = end_piece[3] + end_piece[4] * d_stop_   # 出口の頂点(=最終フレーム)
     data = {
         "fps": FPS,
         "title": TITLE,
         "start_pos": [float(x) for x in start_pos],
+        "end_pos": [float(x) for x in seam_pos],
+        "start_anchor": [float(x) for x in start_pos],
+        "end_anchor": [float(x) for x in seam_pos],
         "t_start": t_start,
         "n_frames": n_frames,
         "audio_delay_ms": int(round(max(0.0, -t_start) * 1000)),
+        "duration_s": round(n_frames / FPS, 3),
         "ball_r": BALL_R,
         "plat_h": PLAT_H,
         "rail_h": RAIL_H,

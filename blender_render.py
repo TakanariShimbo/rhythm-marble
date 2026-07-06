@@ -468,16 +468,81 @@ def add_wall_hatch(location, ball_r, wall_mat, fps):
         pnl.keyframe_insert("location", frame=f1)
 
 
-def keyframe_visibility(ob, f_in, f_out, fps):
-    """スケールで出現/消滅を表現する(0.25秒でポップイン/アウト)。"""
+def add_tunnel(a, b, u, ball_r):
+    """レールの端を包む暗いトンネル。ボールが闇に溶けて消える(現れる)。
+
+    a=奥(閉じた側), b=口(開いた側)。上下・背面・奥端は閉じ、
+    口側と手前(カメラ側)の口元だけ開けて、奥は前面も覆う。
+    """
+    dark = bpy.data.materials.new("tunnel")
+    dark.use_nodes = True
+    db = dark.node_tree.nodes["Principled BSDF"]
+    db.inputs["Base Color"].default_value = (0.008, 0.008, 0.012, 1)
+    db.inputs["Roughness"].default_value = 0.95
+    ax, ay = a[0], a[1]
+    bx, by = b[0], b[1]
+    cx, cy = (ax + bx) / 2, (ay + by) / 2
+    L = math.hypot(bx - ax, by - ay)
+    ang = math.atan2(-(by - ay) / L if L else 0, (bx - ax) / L if L else 1)
+    hh = ball_r + 0.10          # 半分の高さ
+    hd = ball_r + 0.08          # 奥行き(Blender Y)の半分
+    th = 0.012                  # 板厚
+
+    def slab(local_x, local_z, sx, sz, y_off, sy=hd * 2):
+        bpy.ops.mesh.primitive_cube_add(size=1)
+        ob = bpy.context.object
+        ob.scale = (sx, sy, sz)
+        ob.rotation_euler = (0, ang, 0)
+        ca, sa = math.cos(ang), math.sin(ang)
+        wx = cx + local_x * ca + local_z * sa
+        wz = (cy) + (-local_x * sa + local_z * ca)
+        ob.location = (wx, y_off, wz)
+        ob.data.materials.append(dark)
+
+    slab(0, hh, L + 0.1, th, 0.02)              # 天井
+    slab(0, -hh, L + 0.1, th, 0.02)             # 床
+    slab(-L / 2 - 0.05, 0, th, hh * 2, 0.02)    # 奥端の蓋
+    # 背面(壁側)
+    bpy.ops.mesh.primitive_cube_add(size=1)
+    ob = bpy.context.object
+    ob.scale = (L + 0.1, th, hh * 2)
+    ob.rotation_euler = (0, ang, 0)
+    ob.location = (cx, 0.02 + hd, cy)
+    ob.data.materials.append(dark)
+    # 手前(カメラ側)は奥60%だけ覆う: 口元は見える
+    bpy.ops.mesh.primitive_cube_add(size=1)
+    ob = bpy.context.object
+    ob.scale = (L * 0.6, th, hh * 2)
+    ob.rotation_euler = (0, ang, 0)
+    ca, sa = math.cos(ang), math.sin(ang)
+    off = -L * 0.2
+    ob.location = (cx + off * ca, 0.02 - hd, cy - off * sa)
+    ob.data.materials.append(dark)
+
+
+def keyframe_visibility(ob, f_in, f_out, fps, n_frames=None):
+    """スケールで出現/消滅を表現する(0.25秒でポップイン/アウト)。
+
+    f_inが負(動画開始前から存在)なら最初から表示。
+    n_framesを渡すと、消滅は動画が終わる前に完了するよう前倒しされる
+    (ループの最終フレームに残骸が残らないように)。
+    """
     pop = max(2, int(0.25 * fps))
-    ob.scale = (0, 0, 0)
-    ob.keyframe_insert("scale", frame=max(0, f_in - 1))
-    ob.scale = (1, 1, 1)
-    ob.keyframe_insert("scale", frame=f_in + pop)
-    ob.keyframe_insert("scale", frame=f_out)
-    ob.scale = (0, 0, 0)
-    ob.keyframe_insert("scale", frame=f_out + pop)
+    if n_frames is not None and f_out + pop > n_frames - int(0.2 * fps):
+        f_out = n_frames - int(0.2 * fps) - pop
+    if f_in + pop <= 0:
+        ob.scale = (1, 1, 1)
+        ob.keyframe_insert("scale", frame=0)
+    else:
+        ob.scale = (0, 0, 0)
+        ob.keyframe_insert("scale", frame=max(0, f_in - 1))
+        ob.scale = (1, 1, 1)
+        ob.keyframe_insert("scale", frame=max(1, f_in + pop))
+    if f_out > 0:
+        ob.scale = (1, 1, 1)
+        ob.keyframe_insert("scale", frame=f_out)
+        ob.scale = (0, 0, 0)
+        ob.keyframe_insert("scale", frame=f_out + pop)
 
 
 def build_scene(sc, engine="eevee", samples=48, scale=1.0):
@@ -567,7 +632,10 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     def resolve_at(at, dy=0.0):
         """配置指定: "start"=壁の穴の位置 / "first_plate"=最初の板 / [x, y]"""
         if at == "start":
-            b0 = sc.get("start_pos", sc["ball"][0])
+            b0 = sc.get("start_anchor", sc["ball"][0])
+            return (b0[0], WALL_Y - 0.012, b0[1] + dy)
+        if at == "end":
+            b0 = sc.get("end_anchor", sc["ball"][-1])
             return (b0[0], WALL_Y - 0.012, b0[1] + dy)
         if at == "first_plate":
             p0 = sc["plates"][0]["pos"]
@@ -605,10 +673,9 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
                            resolve_at(fr["at"], fr.get("dy", 0.0)),
                            fr.get("width", 0.9), fr.get("title", ""),
                            font, plaque_mat, frame_mat, plate_text_mat)
-    # ボールが出てくる壁のポート
-    if "start_pos" in sc:
-        sp = sc["start_pos"]
-        add_wall_hatch((sp[0], WALL_Y, sp[1]), sc["ball_r"], wall_mat, fps)
+    # 入口・出口の暗いトンネル(ループの継ぎ目を隠す)
+    for tn in sc.get("tunnels", []):
+        add_tunnel(tn["a"], tn["b"], tn["u"], sc["ball_r"])
     if wall_cfg.get("frames"):
         plaque_mat = make_material("plaque", (0.55, 0.45, 0.25, 1),
                                    metallic=1.0, rough=0.35)
@@ -640,9 +707,13 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     light_energy = float(wall_cfg.get("lights_energy", 55))
     ys = [b[1] for b in sc["ball"]]
     y_top, y_bot = max(ys) + 1.0, min(ys) - 1.0
+    dark_ys = [sc.get("start_pos", [0, 9e9])[1], sc.get("end_pos", [0, -9e9])[1]]
     i_l = 0
     y = y_top
     while y > y_bot:
+        if any(abs(y - dy_) < 2.6 for dy_ in dark_ys):
+            y -= 3.4
+            continue                     # 入口・出口の暗闇ゾーンには置かない
         side = 1 if i_l % 2 == 0 else -1
         # 経路から少し離して置く(近すぎるとパーツが白飛びする)
         bpy.ops.object.light_add(type="POINT",
@@ -701,7 +772,7 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
         add_plate_details(ob, pl["w"], sc["plat_h"], pin_mat)
         f_in = int((pl["t"] - sc["plat_lead"] - t_start) * fps)
         f_out = int((pl["t"] + sc["plat_life"] - t_start) * fps)
-        keyframe_visibility(ob, f_in, f_out, fps)
+        keyframe_visibility(ob, f_in, f_out, fps, n_frames)
         # 着弾の瞬間: 板が法線方向に沈んで跳ね返る+一瞬膨らむ(触れてる感)
         f_hit = int((pl["t"] - t_start) * fps)
         nb = to_b(n)
@@ -737,7 +808,12 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
         ob.rotation_euler = (0, math.atan2(-u[1], u[0]), 0)
         f_in = int((r["t0"] - sc["plat_lead"] - t_start) * fps)
         f_out = int((r["t1"] + sc["plat_life"] - t_start) * fps)
-        keyframe_visibility(ob, f_in, f_out, fps)
+        # 入口・出口レールは常時表示(消えない)
+        if f_in + int(0.25 * fps) <= 0 or f_out >= n_frames:
+            f_out = -1
+            keyframe_visibility(ob, f_in, f_out, fps)
+        else:
+            keyframe_visibility(ob, f_in, f_out, fps, n_frames)
 
     # ---- カメラ(注視点トラックを追従、浅い被写界深度) ----
     target = bpy.data.objects.new("target", None)

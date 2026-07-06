@@ -153,14 +153,16 @@ def cmd_final(args):
     if (indir / "wall.json").exists():
         br += ["--wall", indir / "wall.json"]
     run(br)
-    delay = json.loads(scene.read_text())["audio_delay_ms"]
+    meta = json.loads(scene.read_text())
+    delay = meta["audio_delay_ms"]
+    dur = meta["duration_s"]
     out = outdir / "final.mp4"
     run(["ffmpeg", "-y", "-loglevel", "error",
          "-framerate", "30", "-i", frames / "f_%04d.png",
          "-i", outdir / "audio.mp3",
-         "-af", f"adelay={delay}:all=1",
+         "-af", f"adelay={delay}:all=1,apad", "-t", dur,
          "-c:v", "libx264", "-preset", "fast", "-crf", "19",
-         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", out])
+         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", out])
     print(f"\nフェーズ3完了: {out}")
 
 
