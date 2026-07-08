@@ -288,7 +288,9 @@ document.getElementById('undo').onclick=undo;
 // フェーズ1デフォルト(celesta_hall)を再現: celesta風の音色(基音+4倍音)に
 // ホールリバーブ(wet 0.32 / damping 0.45 相当のIR)をかける
 function toneAt(n,when){
-  const t=Math.max(0.02,when), dur=Math.min(Math.max(n.d,0.35),1.8);
+  // 実機(FluidR3 celesta)はノート長に関わらず約1.1s響く(実測)ため、
+  // 減衰は固定。ノート長は音に影響しない=パイプラインと同じ挙動
+  const t=Math.max(0.02,when), dur=1.1;
   const f=440*Math.pow(2,(n.p-69)/12), vel=n.v/127;
   for(const[mult,gain] of [[1,0.5],[4,0.09],[10.9,0.012]]){
     const o=ctx.createOscillator(),ga=ctx.createGain();
