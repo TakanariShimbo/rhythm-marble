@@ -43,8 +43,8 @@
 <div id="hint">
   ドラッグ=範囲選択 / ノートをドラッグ=移動 / 右端ドラッグ=長さ / ダブルクリック=追加(メロディ) /
   <kbd>M</kbd> メロディ化 <kbd>A</kbd> 伴奏化 <kbd>Del</kbd> 削除 <kbd>←→↑↓</kbd> 微調整
-  <kbd>Ctrl+Z</kbd> 取り消し / ホイール=縦スクロール <kbd>Shift</kbd>+ホイール=横 <kbd>Ctrl</kbd>+ホイール=ズーム /
-  書き出しは track0=メロディ, track1=伴奏
+  <kbd>Ctrl+Z</kbd> 取り消し / ホイール=縦 <kbd>Shift</kbd>+ホイール=横 <kbd>Ctrl</kbd>+ホイール=ズーム
+  中/右ボタンドラッグ=自由パン / 書き出しは track0=メロディ, track1=伴奏
 </div>
 <div id="wrap"><canvas id="cv"></canvas><div id="drop">.mid をここにドラッグ&ドロップ</div></div>
 <script>
@@ -226,12 +226,27 @@ cv.addEventListener('dblclick',e=>{
 });
 cv.addEventListener('wheel',e=>{
   e.preventDefault();
-  if(e.ctrlKey){const s0=x2s(e.offsetX);pxPerSec=Math.min(600,Math.max(20,pxPerSec*(e.deltaY<0?1.15:0.87)));
+  const dy=e.deltaY, dx=e.deltaX;
+  if(e.ctrlKey){const s0=x2s(e.offsetX);pxPerSec=Math.min(600,Math.max(20,pxPerSec*(dy<0?1.15:0.87)));
     viewX=s0*pxPerSec-e.offsetX;}
-  else if(e.shiftKey)viewX=Math.max(-40,viewX+e.deltaY);
-  else viewY=Math.min(127*rowH,Math.max(0,viewY+e.deltaY));
+  else if(e.shiftKey||Math.abs(dx)>Math.abs(dy))
+    viewX=Math.max(-40,viewX+(Math.abs(dx)>Math.abs(dy)?dx:dy)); // ChromeはShift+ホイールがdeltaXに入る
+  else viewY=Math.min(127*rowH,Math.max(0,viewY+dy));
   draw();
 },{passive:false});
+// 中ボタン(or 右ボタン)ドラッグで自由パン
+let pan=null;
+cv.addEventListener('auxclick',e=>e.preventDefault());
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+cv.addEventListener('pointerdown',e=>{
+  if(e.button===1||e.button===2){pan={x:e.clientX,y:e.clientY,vx:viewX,vy:viewY};
+    cv.setPointerCapture(e.pointerId);e.preventDefault()}
+});
+cv.addEventListener('pointermove',e=>{
+  if(pan){viewX=Math.max(-40,pan.vx-(e.clientX-pan.x));
+    viewY=Math.min(127*rowH,Math.max(0,pan.vy-(e.clientY-pan.y)));draw()}
+});
+cv.addEventListener('pointerup',()=>{pan=null});
 addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT'&&e.target.type==='file')return;
   if(e.code==='Space'){e.preventDefault();togglePlay()}
@@ -256,24 +271,45 @@ document.getElementById('toMel').onclick=()=>assign(0);
 document.getElementById('toAcc').onclick=()=>assign(1);
 document.getElementById('del').onclick=delSel;
 document.getElementById('undo').onclick=undo;
-// ---------- playback (celesta風: 基音+静かな4倍音、指数減衰) ----------
+// ---------- playback ----------
+// フェーズ1デフォルト(celesta_hall)を再現: celesta風の音色(基音+4倍音)に
+// ホールリバーブ(wet 0.32 / damping 0.45 相当のIR)をかける
 function toneAt(n,when){
-  const t=Math.max(0.02,when), dur=Math.min(Math.max(n.d,0.25),1.6);
+  const t=Math.max(0.02,when), dur=Math.min(Math.max(n.d,0.35),1.8);
   const f=440*Math.pow(2,(n.p-69)/12), vel=n.v/127;
-  for(const[mult,gain] of [[1,0.5],[4,0.05]]){
+  for(const[mult,gain] of [[1,0.5],[4,0.09],[10.9,0.012]]){
     const o=ctx.createOscillator(),ga=ctx.createGain();
     o.frequency.value=f*mult;o.type='sine';
     ga.gain.setValueAtTime(0,t);
-    ga.gain.linearRampToValueAtTime(gain*vel,t+0.008);
-    ga.gain.exponentialRampToValueAtTime(0.0008,t+dur);
+    ga.gain.linearRampToValueAtTime(gain*vel,t+0.006);
+    ga.gain.exponentialRampToValueAtTime(0.0008,t+dur*(mult>1?0.55:1));
     o.connect(ga).connect(master);o.start(t);o.stop(t+dur+0.05);
   }
+}
+function makeHallIR(seconds=1.5,damping=6){
+  const len=ctx.sampleRate*seconds, ir=ctx.createBuffer(2,len,ctx.sampleRate);
+  for(let ch=0;ch<2;ch++){
+    const b=ir.getChannelData(ch); let lp=0;
+    for(let i=0;i<len;i++){
+      const t=i/ctx.sampleRate;
+      const n=(Math.random()*2-1)*Math.exp(-t*(60/Math.log(10)/seconds*0.7));
+      lp+=(n-lp)*Math.min(1,damping*0.06);       // 高域を丸める(damping相当)
+      b[i]=lp*Math.exp(-t*2.2);
+    }
+  }
+  return ir;
 }
 function togglePlay(){
   if(playing){stopPlay();return}
   if(!notes.length)return;
   ctx=new AudioContext();master=ctx.createGain();master.gain.value=0.5;
-  const comp=ctx.createDynamicsCompressor();master.connect(comp).connect(ctx.destination);
+  const comp=ctx.createDynamicsCompressor();
+  const dry=ctx.createGain();dry.gain.value=0.65;
+  const wet=ctx.createGain();wet.gain.value=0.32;
+  const conv=ctx.createConvolver();conv.buffer=makeHallIR();
+  master.connect(dry).connect(comp);
+  master.connect(conv).connect(wet).connect(comp);
+  comp.connect(ctx.destination);
   const melodyOnly=document.getElementById('melodyOnly').checked;
   playOffset=cursor;playT0=ctx.currentTime+0.05;playing=true;
   document.getElementById('play').textContent='⏹ 停止';
