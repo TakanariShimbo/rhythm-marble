@@ -939,6 +939,10 @@ def main():
     parser.add_argument("-o", "--output", type=Path, required=True, help="出力MP4")
     parser.add_argument("--min-pitch", type=int, default=55,
                         help="これ未満の低音を捨てる(convert.pyと同値にすること)")
+    parser.add_argument("--skip", type=float, default=0,
+                        help="先頭N秒を捨てて詰める(convert.pyと同値にすること)")
+    parser.add_argument("--speed", type=float, default=1.0,
+                        help="テンポ倍率(convert.pyと同値にすること)")
     parser.add_argument("--duration", type=float, default=None,
                         help="先頭からこの秒数だけ描画(プレビュー用)")
     parser.add_argument("--long-note", choices=["keep", "cut", "split"],
@@ -959,6 +963,13 @@ def main():
     if args.duration:
         end_time = min(end_time, args.duration)
         bounces = [b for b in bounces if b[0] <= end_time]
+    if args.skip > 0:
+        # convert.pyと同じ順序: duration切り出し → 先頭スキップ → テンポ縮尺
+        bounces = [(t - args.skip, p) for t, p in bounces if t >= args.skip]
+        end_time -= args.skip
+    if args.speed != 1.0:
+        bounces = [(t / args.speed, p) for t, p in bounces]
+        end_time /= args.speed
     pts, pieces, normals, sizes, rails = build_path(bounces)
     print(f"バウンド数: {len(pts)}, レール数: {len(rails)}, 長さ: {end_time:.1f}s")
 

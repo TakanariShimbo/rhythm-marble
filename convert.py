@@ -246,6 +246,12 @@ def main():
     parser.add_argument("--max-len", type=float, default=0,
                         help="曲を先頭N秒に切り詰める(無音カット後の時刻基準。"
                              "make_video --durationと同じ境界。0で無効)")
+    parser.add_argument("--skip", type=float, default=0,
+                        help="曲の先頭N秒を捨てて詰める(無音カット後・元テンポの"
+                             "時刻基準。max-lenより後に適用されない=窓は[skip, max-len])")
+    parser.add_argument("--speed", type=float, default=1.0,
+                        help="テンポ倍率(1.1で1割速く。音程は変わらない。"
+                             "make_video --speedと同値にすること)")
     parser.add_argument("--gain", type=float, default=0.0,
                         help="出力ゲイン調整dB (デフォルト: 0)")
     parser.add_argument("--reverb", type=float, default=DEFAULT_ROOM,
@@ -285,6 +291,19 @@ def main():
         # make_video --duration と同じ境界(start <= N)。音の尾は自然に残す
         for inst in midi_data.instruments:
             inst.notes = [n for n in inst.notes if n.start <= args.max_len]
+    if args.skip > 0:
+        # 窓の先頭を捨てて0秒に詰める
+        for inst in midi_data.instruments:
+            inst.notes = [n for n in inst.notes if n.start >= args.skip]
+            for n in inst.notes:
+                n.start -= args.skip
+                n.end -= args.skip
+    if args.speed != 1.0:
+        # テンポ変更(max-len適用後の時間軸を一様に縮尺)
+        for inst in midi_data.instruments:
+            for n in inst.notes:
+                n.start /= args.speed
+                n.end /= args.speed
     midi_data = restyle(midi_data, INSTRUMENTS[instrument],
                         octave, args.min_velocity)
 

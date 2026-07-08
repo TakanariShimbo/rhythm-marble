@@ -122,12 +122,16 @@ def cmd_audio(args):
          "--long-note", args.long_note,
          "--long-note-len", args.long_note_len,
          *(["--max-len", args.max_len] if args.max_len else []),
+         *(["--skip", args.skip] if args.skip else []),
+         *(["--speed", args.speed] if args.speed != 1.0 else []),
          *tone_args(args), "--octave", args.octave,
          "--sf2", SF2,
          "--save-midi", "-o", audio])
     (outdir / "config.json").write_text(json.dumps({
         "track": args.track,
         "max_len": args.max_len,
+        "skip": args.skip,
+        "speed": args.speed,
         "tone": args.tone,
         "instrument": args.instrument,
         "octave": args.octave,
@@ -152,7 +156,9 @@ def mv_args(midi: Path, cfg: dict, args):
           "--track", cfg["track"],
           "--long-note", cfg.get("long_note", "keep"),
           "--long-note-len", cfg.get("long_note_len", 0.5),
-          "--min-pitch", cfg.get("min_pitch", 55)]
+          "--min-pitch", cfg.get("min_pitch", 55),
+          "--skip", cfg.get("skip", 0) or 0,
+          "--speed", cfg.get("speed", 1.0)]
     duration = args.duration or cfg.get("max_len")
     if duration:
         mv += ["--duration", duration]
@@ -210,6 +216,10 @@ def main():
                         "省略時: 全トラックを聴き比べ用に出力")
     p.add_argument("--max-len", type=float, default=None,
                    help="曲を先頭N秒に切り詰める(preview/finalにも自動反映)")
+    p.add_argument("--skip", type=float, default=0,
+                   help="先頭N秒を捨てて詰める(元テンポ基準。preview/finalにも自動反映)")
+    p.add_argument("--speed", type=float, default=1.0,
+                   help="テンポ倍率(1.1で1割速く。preview/finalにも自動反映)")
     p.add_argument("--tone", default="celesta_hall",
                    choices=["celesta_hall", "musicbox_hall", "kalimba_hall"],
                    help="音色プリセット(楽器+質感+残響のセット。"
