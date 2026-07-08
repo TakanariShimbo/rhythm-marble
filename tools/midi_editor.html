@@ -1,0 +1,328 @@
+<meta charset="utf-8">
+<title>Rhythm Marble — MIDI Editor</title>
+<style>
+  :root{
+    --bg:#1b1e23; --panel:#24282f; --rule:#333941; --ink:#dfe3e8; --sub:#8b93a0;
+    --melody:#e8b34a; --melody-dim:#8a6a2c; --accomp:#5f87b8; --accomp-dim:#3c5573;
+    --sel:#ffffff; --playhead:#e05a4e; --grid:#262b32; --grid2:#2e343d;
+  }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:system-ui,sans-serif;overflow:hidden}
+  #bar{display:flex;gap:.6rem;align-items:center;padding:.5rem .8rem;
+    background:var(--panel);border-bottom:1px solid var(--rule);flex-wrap:wrap}
+  #bar b{font-size:.95rem;letter-spacing:.02em}
+  button,label.btn{background:#31363f;color:var(--ink);border:1px solid var(--rule);
+    border-radius:4px;padding:.32rem .7rem;font-size:.82rem;cursor:pointer}
+  button:hover,label.btn:hover{background:#3a404b}
+  button.primary{background:var(--melody);color:#1b1e23;border-color:transparent;font-weight:600}
+  #bar .sp{flex:1}
+  #hint{font-size:.75rem;color:var(--sub);padding:.35rem .8rem;background:var(--panel);
+    border-bottom:1px solid var(--rule)}
+  #wrap{position:relative;height:calc(100% - 86px)}
+  canvas{display:block;width:100%;height:100%;cursor:default}
+  #drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    color:var(--sub);font-size:1rem;pointer-events:none}
+  input[type=file]{display:none}
+  .stat{font-size:.78rem;color:var(--sub)}
+  kbd{background:#2e333c;border:1px solid var(--rule);border-radius:3px;
+    padding:0 .3em;font-size:.9em}
+</style>
+<div id="bar">
+  <b>🔮 MIDI Editor</b>
+  <label class="btn">📂 開く<input type="file" id="file" accept=".mid,.midi"></label>
+  <button id="play">▶ 再生 <kbd>Space</kbd></button>
+  <label style="font-size:.8rem"><input type="checkbox" id="melodyOnly"> メロディのみ再生</label>
+  <button id="toMel" title="M">選択→メロディ</button>
+  <button id="toAcc" title="A">選択→伴奏</button>
+  <button id="del">削除 <kbd>Del</kbd></button>
+  <button id="undo">↩ 戻す</button>
+  <span class="sp"></span>
+  <span class="stat" id="stat"></span>
+  <button class="primary" id="save">💾 .mid 書き出し</button>
+</div>
+<div id="hint">
+  ドラッグ=範囲選択 / ノートをドラッグ=移動 / 右端ドラッグ=長さ / ダブルクリック=追加(メロディ) /
+  <kbd>M</kbd> メロディ化 <kbd>A</kbd> 伴奏化 <kbd>Del</kbd> 削除 <kbd>←→↑↓</kbd> 微調整
+  <kbd>Ctrl+Z</kbd> 取り消し / ホイール=縦スクロール <kbd>Shift</kbd>+ホイール=横 <kbd>Ctrl</kbd>+ホイール=ズーム /
+  書き出しは track0=メロディ, track1=伴奏
+</div>
+<div id="wrap"><canvas id="cv"></canvas><div id="drop">.mid をここにドラッグ&ドロップ</div></div>
+<script>
+"use strict";
+// ---------- state ----------
+let notes = [];            // {t,d,p,v,track} track:0=melody 1=accomp
+let sel = new Set();
+let viewX = 0, pxPerSec = 90, rowH = 12, viewY = 40*12;  // viewY: px offset from pitch 127 top
+let cursor = 0, playing = false, playT0 = 0, playOffset = 0, ctx = null, master = null;
+let undoStack = [];
+const cv = document.getElementById('cv'), g = cv.getContext('2d');
+const wrap = document.getElementById('wrap'), drop = document.getElementById('drop');
+
+function snapshot(){ undoStack.push(JSON.stringify(notes)); if(undoStack.length>100) undoStack.shift(); }
+function undo(){ const s = undoStack.pop(); if(s){ notes = JSON.parse(s); sel.clear(); draw(); } }
+
+// ---------- MIDI parse ----------
+function parseMidi(buf){
+  const d = new DataView(buf); let pos = 0;
+  const u32=()=>{const v=d.getUint32(pos);pos+=4;return v}, u16=()=>{const v=d.getUint16(pos);pos+=2;return v}, u8=()=>d.getUint8(pos++);
+  const vlq=()=>{let v=0,b;do{b=u8();v=(v<<7)|(b&0x7f)}while(b&0x80);return v};
+  if(u32()!==0x4d546864) throw 'not MIDI'; u32();
+  const fmt=u16(), ntr=u16(), div=u16();
+  if(div&0x8000) throw 'SMPTE未対応';
+  const tempos=[{tick:0,us:500000}], raw=[];
+  for(let tr=0;tr<ntr;tr++){
+    if(u32()!==0x4d54726b) throw 'track?';
+    const len=u32(), end=pos+len; let tick=0, run=0;
+    while(pos<end){
+      tick+=vlq(); let st=u8();
+      if(st<0x80){pos--;st=run} else run=st;
+      const type=st&0xf0;
+      if(st===0xff){const mt=u8(),l=vlq();
+        if(mt===0x51){const a=u8(),b=u8(),c=u8();tempos.push({tick,us:(a<<16)|(b<<8)|c})}
+        else pos+=l;
+      } else if(st===0xf0||st===0xf7){pos+=vlq()}
+      else if(type===0x90||type===0x80){const p=u8(),v=u8();
+        raw.push({tick,on:type===0x90&&v>0,p,v:v||64,tr})}
+      else if(type===0xa0||type===0xb0||type===0xe0){pos+=2}
+      else if(type===0xc0||type===0xd0){pos+=1}
+    }
+    pos=end;
+  }
+  tempos.sort((a,b)=>a.tick-b.tick);
+  const seg=[]; let t=0;
+  for(let i=0;i<tempos.length;i++){
+    const next=tempos[i+1]?tempos[i+1].tick:Infinity;
+    seg.push({tick:tempos[i].tick,sec:t,spt:tempos[i].us/1e6/div});
+    if(next<Infinity) t+=(next-tempos[i].tick)*tempos[i].us/1e6/div;
+  }
+  const t2s=tk=>{let s=seg[0];for(const x of seg){if(x.tick<=tk)s=x;else break}return s.sec+(tk-s.tick)*s.spt};
+  const out=[], open={};
+  raw.sort((a,b)=>a.tick-b.tick||(a.on?1:-1));
+  // ノートを含むトラックが複数あれば先頭をメロディ(0)、それ以外を伴奏(1)に。
+  // 1トラックだけなら全部伴奏スタート(メロディはユーザーが選ぶ)
+  const noteTracks=[...new Set(raw.map(e=>e.tr))].sort((a,b)=>a-b);
+  const trackOf=tr=>(noteTracks.length>1&&tr===noteTracks[0])?0:1;
+  for(const e of raw){
+    const k=e.tr+':'+e.p;
+    if(e.on){ if(open[k]) close(open[k],e.tick); open[k]={tick:e.tick,p:e.p,v:e.v,tr:e.tr}; }
+    else if(open[k]){ close(open[k],e.tick); delete open[k]; }
+  }
+  function close(o,endTick){
+    const t0=t2s(o.tick), t1=t2s(endTick);
+    if(t1-t0>0.01) out.push({t:t0,d:t1-t0,p:o.p,v:o.v,track:trackOf(o.tr)});
+  }
+  for(const k in open) close(open[k], open[k].tick+div);
+  return out;
+}
+// ---------- MIDI write (format1, 480ppq, 120bpm) ----------
+function writeMidi(){
+  const PPQ=480, s2t=s=>Math.round(s*2*PPQ);
+  function vlq(v){const b=[v&0x7f];while(v>>=7)b.unshift((v&0x7f)|0x80);return b}
+  function track(ns,name){
+    const ev=[];
+    for(const n of ns){ev.push([s2t(n.t),0x90,n.p,n.v]);ev.push([s2t(n.t+n.d),0x80,n.p,0])}
+    ev.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+    const bytes=[0,0xff,0x03,name.length,...[...name].map(c=>c.charCodeAt(0))];
+    let last=0;
+    for(const[tk,st,p,v] of ev){bytes.push(...vlq(tk-last),st,p,v);last=tk}
+    bytes.push(0,0xff,0x2f,0);
+    return bytes;
+  }
+  const t0=[0,0xff,0x51,3,0x07,0xa1,0x20,0,0xff,0x2f,0]; // tempo120
+  const trks=[t0,track(notes.filter(n=>n.track===0),'melody'),
+              track(notes.filter(n=>n.track===1),'accomp')];
+  const head=[0x4d,0x54,0x68,0x64,0,0,0,6,0,1,0,trks.length,PPQ>>8,PPQ&0xff];
+  const out=[...head];
+  for(const t of trks){out.push(0x4d,0x54,0x72,0x6b,t.length>>>24&255,t.length>>>16&255,t.length>>>8&255,t.length&255,...t)}
+  return new Uint8Array(out);
+}
+// ---------- drawing ----------
+function resize(){cv.width=wrap.clientWidth*devicePixelRatio;cv.height=wrap.clientHeight*devicePixelRatio;
+  g.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);draw()}
+addEventListener('resize',resize);
+const x2s=x=>(x+viewX)/pxPerSec, s2x=s=>s*pxPerSec-viewX;
+const y2p=y=>127-Math.floor((y+viewY)/rowH), p2y=p=>(127-p)*rowH-viewY;
+function draw(){
+  const W=wrap.clientWidth,H=wrap.clientHeight;
+  g.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--bg');g.fillRect(0,0,W,H);
+  for(let p=y2p(H)-1;p<=y2p(0)+1;p++){
+    const y=p2y(p), black=[1,3,6,8,10].includes(p%12);
+    g.fillStyle=black?'#20242b':'#23272f';g.fillRect(0,y,W,rowH);
+    if(p%12===0){g.fillStyle='#3a4048';g.fillRect(0,y+rowH-1,W,1);
+      g.fillStyle='#6b7280';g.font='9px system-ui';g.fillText('C'+(p/12-1),2,y+rowH-3)}
+  }
+  const t1=x2s(W);
+  for(let s=Math.floor(x2s(0));s<=t1;s++){const x=s2x(s);
+    g.fillStyle=s%5?'var(--grid)':'#39404a';g.fillStyle=s%5?'#2a2f37':'#39404a';g.fillRect(x,0,1,H);
+    if(s%5===0){g.fillStyle='#6b7280';g.font='10px system-ui';g.fillText(s+'s',x+3,12)}}
+  for(const n of notes){
+    const x=s2x(n.t),y=p2y(n.p),w=Math.max(3,n.d*pxPerSec);
+    if(x>W||x+w<0||y>H||y<-rowH)continue;
+    g.fillStyle=n.track===0?'var(--melody)':'var(--accomp)';
+    g.fillStyle=n.track===0?'#e8b34a':'#5f87b8';
+    g.globalAlpha=.92;g.fillRect(x,y+1,w,rowH-2);g.globalAlpha=1;
+    if(sel.has(n)){g.strokeStyle='#fff';g.lineWidth=1.4;g.strokeRect(x+.5,y+1.5,w-1,rowH-3)}
+  }
+  if(rubber){g.strokeStyle='#ffffff88';g.setLineDash([4,3]);
+    g.strokeRect(rubber.x0,rubber.y0,rubber.x1-rubber.x0,rubber.y1-rubber.y0);g.setLineDash([])}
+  const px=s2x(playing?playOffset+(ctx.currentTime-playT0):cursor);
+  g.fillStyle='#e05a4e';g.fillRect(px,0,1.5,H);
+  document.getElementById('stat').textContent=
+    `メロディ ${notes.filter(n=>n.track===0).length} / 伴奏 ${notes.filter(n=>n.track===1).length}ノート`+
+    (sel.size?` / 選択 ${sel.size}`:'');
+}
+// ---------- interaction ----------
+let drag=null, rubber=null;
+function hit(mx,my){
+  for(let i=notes.length-1;i>=0;i--){const n=notes[i];
+    const x=s2x(n.t),y=p2y(n.p),w=Math.max(3,n.d*pxPerSec);
+    if(mx>=x&&mx<=x+w&&my>=y&&my<=y+rowH) return n}
+  return null;
+}
+cv.addEventListener('mousedown',e=>{
+  const mx=e.offsetX,my=e.offsetY,n=hit(mx,my);
+  if(n){
+    if(!sel.has(n)&&!e.shiftKey)sel.clear();
+    sel.add(n);
+    const edge=mx>s2x(n.t)+Math.max(3,n.d*pxPerSec)-6;
+    snapshot();
+    drag={mode:edge?'resize':'move',mx,my,orig:[...sel].map(x=>({n:x,t:x.t,d:x.d,p:x.p}))};
+  } else {
+    if(!e.shiftKey)sel.clear();
+    rubber={x0:mx,y0:my,x1:mx,y1:my};
+    cursor=x2s(mx);
+  }
+  draw();
+});
+cv.addEventListener('mousemove',e=>{
+  const mx=e.offsetX,my=e.offsetY;
+  if(drag){
+    const dt=(mx-drag.mx)/pxPerSec, dp=Math.round((drag.my-my)/rowH);
+    for(const o of drag.orig){
+      if(drag.mode==='move'){o.n.t=Math.max(0,o.t+dt);o.n.p=Math.min(127,Math.max(0,o.p+dp))}
+      else o.n.d=Math.max(0.05,o.d+dt);
+    }
+    draw();
+  } else if(rubber){rubber.x1=mx;rubber.y1=my;draw()}
+  else{const n=hit(mx,my);
+    cv.style.cursor=n?(mx>s2x(n.t)+Math.max(3,n.d*pxPerSec)-6?'ew-resize':'grab'):'default'}
+});
+addEventListener('mouseup',()=>{
+  if(rubber){
+    const[a,b]=[Math.min(rubber.x0,rubber.x1),Math.max(rubber.x0,rubber.x1)];
+    const[c,dd]=[Math.min(rubber.y0,rubber.y1),Math.max(rubber.y0,rubber.y1)];
+    if(b-a>4||dd-c>4)for(const n of notes){
+      const x=s2x(n.t),y=p2y(n.p),w=Math.max(3,n.d*pxPerSec);
+      if(x+w>=a&&x<=b&&y+rowH>=c&&y<=dd)sel.add(n);
+    }
+    rubber=null;draw();
+  }
+  drag=null;
+});
+cv.addEventListener('dblclick',e=>{
+  snapshot();
+  const n={t:x2s(e.offsetX),d:0.3,p:y2p(e.offsetY),v:90,track:0};
+  notes.push(n);sel.clear();sel.add(n);draw();
+});
+cv.addEventListener('wheel',e=>{
+  e.preventDefault();
+  if(e.ctrlKey){const s0=x2s(e.offsetX);pxPerSec=Math.min(600,Math.max(20,pxPerSec*(e.deltaY<0?1.15:0.87)));
+    viewX=s0*pxPerSec-e.offsetX;}
+  else if(e.shiftKey)viewX=Math.max(-40,viewX+e.deltaY);
+  else viewY=Math.min(127*rowH,Math.max(0,viewY+e.deltaY));
+  draw();
+},{passive:false});
+addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'&&e.target.type==='file')return;
+  if(e.code==='Space'){e.preventDefault();togglePlay()}
+  else if(e.key==='Delete'||e.key==='Backspace'){delSel()}
+  else if(e.key==='m'||e.key==='M'){assign(0)}
+  else if(e.key==='a'&&!e.ctrlKey||e.key==='A'&&!e.ctrlKey){assign(1)}
+  else if(e.ctrlKey&&e.key==='z'){e.preventDefault();undo()}
+  else if(e.key.startsWith('Arrow')&&sel.size){
+    e.preventDefault();snapshot();
+    for(const n of sel){
+      if(e.key==='ArrowLeft')n.t=Math.max(0,n.t-0.02);
+      if(e.key==='ArrowRight')n.t+=0.02;
+      if(e.key==='ArrowUp')n.p=Math.min(127,n.p+1);
+      if(e.key==='ArrowDown')n.p=Math.max(0,n.p-1);
+    }
+    draw();
+  }
+});
+function assign(tr){if(!sel.size)return;snapshot();for(const n of sel)n.track=tr;draw()}
+function delSel(){if(!sel.size)return;snapshot();notes=notes.filter(n=>!sel.has(n));sel.clear();draw()}
+document.getElementById('toMel').onclick=()=>assign(0);
+document.getElementById('toAcc').onclick=()=>assign(1);
+document.getElementById('del').onclick=delSel;
+document.getElementById('undo').onclick=undo;
+// ---------- playback (celesta風: 基音+静かな4倍音、指数減衰) ----------
+function toneAt(n,when){
+  const t=Math.max(0.02,when), dur=Math.min(Math.max(n.d,0.25),1.6);
+  const f=440*Math.pow(2,(n.p-69)/12), vel=n.v/127;
+  for(const[mult,gain] of [[1,0.5],[4,0.05]]){
+    const o=ctx.createOscillator(),ga=ctx.createGain();
+    o.frequency.value=f*mult;o.type='sine';
+    ga.gain.setValueAtTime(0,t);
+    ga.gain.linearRampToValueAtTime(gain*vel,t+0.008);
+    ga.gain.exponentialRampToValueAtTime(0.0008,t+dur);
+    o.connect(ga).connect(master);o.start(t);o.stop(t+dur+0.05);
+  }
+}
+function togglePlay(){
+  if(playing){stopPlay();return}
+  if(!notes.length)return;
+  ctx=new AudioContext();master=ctx.createGain();master.gain.value=0.5;
+  const comp=ctx.createDynamicsCompressor();master.connect(comp).connect(ctx.destination);
+  const melodyOnly=document.getElementById('melodyOnly').checked;
+  playOffset=cursor;playT0=ctx.currentTime+0.05;playing=true;
+  document.getElementById('play').textContent='⏹ 停止';
+  for(const n of notes){
+    if(melodyOnly&&n.track!==0)continue;
+    if(n.t>=playOffset-0.001) toneAt(n, playT0+(n.t-playOffset)-0+0.05);
+  }
+  animate();
+}
+function stopPlay(){
+  playing=false;if(ctx){ctx.close();ctx=null}
+  document.getElementById('play').textContent='▶ 再生 ';
+  const k=document.createElement('kbd');k.textContent='Space';
+  document.getElementById('play').appendChild(k);
+  draw();
+}
+function animate(){
+  if(!playing)return;
+  const t=playOffset+(ctx.currentTime-playT0);
+  const end=Math.max(...notes.map(n=>n.t+n.d));
+  if(t>end+1){cursor=0;stopPlay();return}
+  const px=s2x(t),W=wrap.clientWidth;
+  if(px>W*0.85)viewX+=px-W*0.85;
+  draw();requestAnimationFrame(animate);
+}
+document.getElementById('play').onclick=togglePlay;
+// ---------- file io ----------
+function load(buf,name){
+  try{notes=parseMidi(buf)}catch(err){alert('読み込み失敗: '+err);return}
+  sel.clear();undoStack=[];cursor=0;viewX=-10;
+  const ps=notes.map(n=>n.p);
+  viewY=(127-Math.max(...ps)-3)*rowH;
+  drop.style.display='none';
+  document.title=name+' — MIDI Editor';
+  draw();
+}
+document.getElementById('file').onchange=async e=>{
+  const f=e.target.files[0];if(f)load(await f.arrayBuffer(),f.name);
+};
+wrap.addEventListener('dragover',e=>e.preventDefault());
+wrap.addEventListener('drop',async e=>{
+  e.preventDefault();
+  const f=e.dataTransfer.files[0];if(f)load(await f.arrayBuffer(),f.name);
+});
+document.getElementById('save').onclick=()=>{
+  if(!notes.length)return;
+  const blob=new Blob([writeMidi()],{type:'audio/midi'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='song.mid';a.click();
+};
+resize();
+</script>
