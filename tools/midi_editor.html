@@ -64,8 +64,8 @@
   </span>
   <span class="grp" title="編集">
     <button id="selAll" title="全選択 (Ctrl+A)">全選択</button>
-    <button id="toMel" title="選択をメロディへ (M)">→メロディ</button>
-    <button id="toAcc" title="選択を伴奏へ (A)">→伴奏</button>
+    <button id="toMel" title="選択にメロディマークを付ける (M)">★メロディ化</button>
+    <button id="toAcc" title="選択のマークを外して元のトラックへ (A)">マーク解除</button>
     <button id="squash" title="選択を左詰めで一定長に (L)">⇤ 長さ統一</button>
     <input type="number" id="squashLen" value="0.30" min="0.05" max="2" step="0.05"
       title="統一する長さ(秒)">
@@ -106,7 +106,7 @@
     <h3>キーボード</h3>
     <table>
       <tr><td><kbd>Space</kbd></td><td>再生 / 停止</td></tr>
-      <tr><td><kbd>M</kbd> / <kbd>A</kbd></td><td>選択をメロディ / 伴奏へ</td></tr>
+      <tr><td><kbd>M</kbd> / <kbd>A</kbd></td><td>選択にメロディマーク(★金) / マーク解除(元のトラック色に戻る)</td></tr>
       <tr><td><kbd>L</kbd></td><td>選択を左詰めで一定長に</td></tr>
       <tr><td><kbd>Del</kbd></td><td>選択を削除</td></tr>
       <tr><td><kbd>←→↑↓</kbd></td><td>選択を微調整(時間/音程)</td></tr>
@@ -114,8 +114,8 @@
     </table>
     <h3>書き出し</h3>
     <table>
-      <tr><td>track0(金色)</td><td>メロディ → pipeline.py audio --track 0</td></tr>
-      <tr><td>track1(青色)</td><td>伴奏</td></tr>
+      <tr><td>track0 "melody"</td><td>★マークしたノートから新規生成 → pipeline.py audio --track 0</td></tr>
+      <tr><td>track1以降</td><td>元のトラック構造をそのまま保存(マーク分は除く)</td></tr>
     </table>
   </div>
 </div>
@@ -125,55 +125,58 @@
 // ---------- state ----------
 let notes = [];            // {t,d,p,v,track} track:0=melody(慣例) 1..=その他
 let sel = new Set();
-// トラックごとの表示設定。
-// ルール: 金色(MELODY_COLOR)は「メロディ=track0」の予約色で変更不可。
-// 他トラックはPALETTE(金を含まない)から自由に変更できる
+// メロディは「トラック」ではなく各ノートのマーク(n.mel)。
+// 元のトラック構造は編集で変化せず、書き出し時にマークされたノートだけを
+// 集めた track0 "melody" が生成される。
+// 金色(MELODY_COLOR)はマークの予約色。他トラックはPALETTEから変更可
 const MELODY_COLOR='#e8b34a';
 const PALETTE=['#5f87b8','#5fb89a','#c97b9e','#9a7bd4',
                '#d4915a','#7bc4d4','#8b95a8','#b8b85f'];
-let trackMeta = [];        // {name,color,visible,audible}
+let trackMeta = [];        // 実トラック {name,color,visible,audible}
+let melMeta = {visible:true,audible:true};   // ★melody擬似トラック
 function ensureTracks(){
   const maxT = notes.length ? Math.max(...notes.map(n=>n.track)) : 0;
   while(trackMeta.length<=maxT){
     const i=trackMeta.length;
-    trackMeta.push({name:i===0?'melody':'track'+i,
-                    color:i===0?MELODY_COLOR:PALETTE[(i-1)%PALETTE.length],
+    trackMeta.push({name:'track'+i,color:PALETTE[i%PALETTE.length],
                     visible:true,audible:true});
   }
   updateTrackPanel();
 }
-function tcol(i){return (trackMeta[i]||{color:'#888'}).color}
-function tvis(i){return !trackMeta[i]||trackMeta[i].visible}
-function taud(i){return !trackMeta[i]||trackMeta[i].audible}
+function ncol(n){return n.mel?MELODY_COLOR:(trackMeta[n.track]||{color:'#888'}).color}
+function nvis(n){return n.mel?melMeta.visible:(!trackMeta[n.track]||trackMeta[n.track].visible)}
+function naud(n){return n.mel?melMeta.audible:(!trackMeta[n.track]||trackMeta[n.track].audible)}
+function panelRow(el, color, label, labelColor, meta, swClick, onToggle){
+  const row=document.createElement('div');row.className='trow';
+  const sw=document.createElement('span');sw.className='sw';
+  sw.style.background=color;
+  if(swClick){sw.title='クリックで色変更';sw.onclick=swClick}
+  else{sw.title='メロディの金色は固定';sw.style.cursor='default'}
+  const eye=document.createElement('span');eye.className='tbtn'+(meta.visible?' on':'');
+  eye.textContent='👁';eye.title='表示/非表示';
+  eye.onclick=()=>{meta.visible=!meta.visible;onToggle();updateTrackPanel();draw()};
+  const spk=document.createElement('span');spk.className='tbtn'+(meta.audible?' on':'');
+  spk.textContent='🔊';spk.title='再生する/しない';
+  spk.onclick=()=>{meta.audible=!meta.audible;updateTrackPanel()};
+  const nm=document.createElement('span');nm.className='tname';
+  nm.textContent=label;
+  if(labelColor)nm.style.color=labelColor;
+  row.append(sw,eye,spk,nm);
+  el.appendChild(row);
+}
 function updateTrackPanel(){
   const el=document.getElementById('trackPanel');
   el.innerHTML='';
+  const melCnt=notes.filter(n=>n.mel).length;
+  panelRow(el, MELODY_COLOR, `★ melody (${melCnt})`, MELODY_COLOR, melMeta,
+    null,
+    ()=>{if(!melMeta.visible)for(const n of [...sel])if(n.mel)sel.delete(n)});
   trackMeta.forEach((tm,i)=>{
-    const cnt=notes.filter(n=>n.track===i).length;
-    const row=document.createElement('div');row.className='trow';
-    const sw=document.createElement('span');sw.className='sw';
-    sw.style.background=tm.color;
-    if(i===0){
-      sw.title='メロディの金色は固定(意味を持つ予約色)';
-      sw.style.cursor='default';
-    }else{
-      sw.title='クリックで色変更';
-      sw.onclick=()=>{const j=(PALETTE.indexOf(tm.color)+1)%PALETTE.length;
-        tm.color=PALETTE[j];updateTrackPanel();draw()};
-    }
-    const eye=document.createElement('span');eye.className='tbtn'+(tm.visible?' on':'');
-    eye.textContent='👁';eye.title='表示/非表示';
-    eye.onclick=()=>{tm.visible=!tm.visible;
-      if(!tm.visible)for(const n of [...sel])if(n.track===i)sel.delete(n);
-      updateTrackPanel();draw()};
-    const spk=document.createElement('span');spk.className='tbtn'+(tm.audible?' on':'');
-    spk.textContent='🔊';spk.title='再生する/しない';
-    spk.onclick=()=>{tm.audible=!tm.audible;updateTrackPanel()};
-    const nm=document.createElement('span');nm.className='tname';
-    nm.textContent=`${i===0?'★':i+':'} ${tm.name} (${cnt})`;
-    if(i===0)nm.style.color=MELODY_COLOR;
-    row.append(sw,eye,spk,nm);
-    el.appendChild(row);
+    const cnt=notes.filter(n=>n.track===i&&!n.mel).length;
+    panelRow(el, tm.color, `${i}: ${tm.name} (${cnt})`, null, tm,
+      ()=>{const j=(PALETTE.indexOf(tm.color)+1)%PALETTE.length;
+        tm.color=PALETTE[j];updateTrackPanel();draw()},
+      ()=>{if(!tm.visible)for(const n of [...sel])if(n.track===i&&!n.mel)sel.delete(n)});
   });
 }
 let viewX = 0, pxPerSec = 90, rowH = 12, viewY = 40*12;  // viewY: px offset from pitch 127 top
@@ -231,12 +234,9 @@ function parseMidi(buf){
   const t2s=tk=>{let s=seg[0];for(const x of seg){if(x.tick<=tk)s=x;else break}return s.sec+(tk-s.tick)*s.spt};
   const out=[], open={};
   raw.sort((a,b)=>a.tick-b.tick||(a.on?1:-1));
-  // ノートを含むトラックを順序を保って0,1,2...に振り直す(潰さない)。
-  // 慣例: track0=メロディ。1トラックだけの場合は「未仕分け」として1へ
+  // ノートを含むトラックを順序を保って0,1,2...に振り直す(潰さない)
   const noteTracks=[...new Set(raw.map(e=>e.tr))].sort((a,b)=>a-b);
-  const trackOf=tr=>noteTracks.length>1?noteTracks.indexOf(tr):1;
-  const names=noteTracks.map((tr,i)=>srcNames[tr]||
-    (noteTracks.length>1&&i===0?'melody':'track'+(noteTracks.length>1?i:1)));
+  const names=noteTracks.map((tr,i)=>srcNames[tr]||'track'+i);
   for(const e of raw){
     const k=e.tr+':'+e.p;
     if(e.on){ if(open[k]) close(open[k],e.tick); open[k]={tick:e.tick,p:e.p,v:e.v,tr:e.tr}; }
@@ -244,10 +244,11 @@ function parseMidi(buf){
   }
   function close(o,endTick){
     const t0=t2s(o.tick), t1=t2s(endTick);
-    if(t1-t0>0.01) out.push({t:t0,d:t1-t0,p:o.p,v:o.v,track:trackOf(o.tr)});
+    if(t1-t0>0.01) out.push({t:t0,d:t1-t0,p:o.p,v:o.v,
+                             track:noteTracks.indexOf(o.tr),mel:false});
   }
   for(const k in open) close(open[k], open[k].tick+div);
-  return {notes:out, names, singleTrack:noteTracks.length===1};
+  return {notes:out, names};
 }
 // ---------- MIDI write (format1, 480ppq, 120bpm) ----------
 function writeMidi(){
@@ -264,11 +265,13 @@ function writeMidi(){
     return bytes;
   }
   const t0=[0,0xff,0x51,3,0x07,0xa1,0x20,0,0xff,0x2f,0]; // tempo120
-  const nT=Math.max(1,...notes.map(n=>n.track))+1;
-  const trks=[t0];
-  for(let i=0;i<nT;i++)
-    trks.push(track(notes.filter(n=>n.track===i),
-                    (trackMeta[i]&&trackMeta[i].name)||('track'+i)));
+  // track0 = マークされたメロディ(選択から生成)、以降は元トラックの残り
+  const trks=[t0, track(notes.filter(n=>n.mel),'melody')];
+  const nT=notes.length?Math.max(...notes.map(n=>n.track))+1:0;
+  for(let i=0;i<nT;i++){
+    const ns=notes.filter(n=>n.track===i&&!n.mel);
+    if(ns.length)trks.push(track(ns,(trackMeta[i]&&trackMeta[i].name)||('track'+i)));
+  }
   const head=[0x4d,0x54,0x68,0x64,0,0,0,6,0,1,0,trks.length,PPQ>>8,PPQ&0xff];
   const out=[...head];
   for(const t of trks){out.push(0x4d,0x54,0x72,0x6b,t.length>>>24&255,t.length>>>16&255,t.length>>>8&255,t.length&255,...t)}
@@ -294,10 +297,10 @@ function draw(){
     g.fillStyle=s%5?'var(--grid)':'#39404a';g.fillStyle=s%5?'#2a2f37':'#39404a';g.fillRect(x,0,1,H);
     if(s%5===0){g.fillStyle='#6b7280';g.font='10px system-ui';g.fillText(s+'s',x+3,12)}}
   for(const n of notes){
-    if(!tvis(n.track))continue;
+    if(!nvis(n))continue;
     const x=s2x(n.t),y=p2y(n.p),w=Math.max(3,n.d*pxPerSec);
     if(x>W||x+w<0||y>H||y<-rowH)continue;
-    g.fillStyle=tcol(n.track);
+    g.fillStyle=ncol(n);
     g.globalAlpha=.92;g.fillRect(x,y+1,w,rowH-2);g.globalAlpha=1;
     if(sel.has(n)){g.strokeStyle='#fff';g.lineWidth=1.4;g.strokeRect(x+.5,y+1.5,w-1,rowH-3)}
   }
@@ -317,7 +320,7 @@ function draw(){
 let drag=null, rubber=null;
 function hit(mx,my){
   for(let i=notes.length-1;i>=0;i--){const n=notes[i];
-    if(!tvis(n.track))continue;
+    if(!nvis(n))continue;
     const x=s2x(n.t),y=p2y(n.p),w=Math.max(3,n.d*pxPerSec);
     if(mx>=x&&mx<=x+w&&my>=y&&my<=y+rowH) return n}
   return null;
@@ -355,7 +358,7 @@ addEventListener('mouseup',()=>{
     const[a,b]=[Math.min(rubber.x0,rubber.x1),Math.max(rubber.x0,rubber.x1)];
     const[c,dd]=[Math.min(rubber.y0,rubber.y1),Math.max(rubber.y0,rubber.y1)];
     if(b-a>4||dd-c>4)for(const n of notes){
-      if(!tvis(n.track))continue;
+      if(!nvis(n))continue;
       const x=s2x(n.t),y=p2y(n.p),w=Math.max(3,n.d*pxPerSec);
       if(x+w>=a&&x<=b&&y+rowH>=c&&y<=dd)sel.add(n);
     }
@@ -365,7 +368,7 @@ addEventListener('mouseup',()=>{
 });
 cv.addEventListener('dblclick',e=>{
   snapshot();
-  const n={t:x2s(e.offsetX),d:0.3,p:y2p(e.offsetY),v:90,track:0};
+  const n={t:x2s(e.offsetX),d:0.3,p:y2p(e.offsetY),v:90,track:0,mel:true};
   notes.push(n);sel.clear();sel.add(n);ensureTracks();draw();
 });
 cv.addEventListener('wheel',e=>{
@@ -400,8 +403,8 @@ addEventListener('keydown',e=>{
   }
   if(e.code==='Space'){e.preventDefault();togglePlay()}
   else if(e.key==='Delete'||e.key==='Backspace'){delSel()}
-  else if(e.key==='m'||e.key==='M'){assign(0)}
-  else if(e.key==='a'&&!e.ctrlKey||e.key==='A'&&!e.ctrlKey){assign(1)}
+  else if(e.key==='m'||e.key==='M'){assign(true)}
+  else if(e.key==='a'&&!e.ctrlKey||e.key==='A'&&!e.ctrlKey){assign(false)}
   else if(e.key==='l'||e.key==='L'){squash()}
   else if(e.ctrlKey&&(e.key==='y'||e.key==='Y'||(e.shiftKey&&(e.key==='z'||e.key==='Z')))){e.preventDefault();redo()}
   else if(e.ctrlKey&&e.key==='z'){e.preventDefault();undo()}
@@ -417,8 +420,8 @@ addEventListener('keydown',e=>{
     draw();
   }
 });
-function assign(tr){if(!sel.size)return;snapshot();for(const n of sel)n.track=tr;
-  ensureTracks();draw()}
+function assign(flag){if(!sel.size)return;snapshot();for(const n of sel)n.mel=flag;
+  updateTrackPanel();draw()}
 function squash(){
   if(!sel.size)return;
   const len=parseFloat(document.getElementById('squashLen').value)||0.3;
@@ -427,12 +430,12 @@ function squash(){
   draw();
 }
 document.getElementById('squash').onclick=squash;
-function selectAll(){sel=new Set(notes.filter(n=>tvis(n.track)));draw()}
+function selectAll(){sel=new Set(notes.filter(n=>nvis(n)));draw()}
 document.getElementById('selAll').onclick=selectAll;
 function delSel(){if(!sel.size)return;snapshot();notes=notes.filter(n=>!sel.has(n));
   sel.clear();updateTrackPanel();draw()}
-document.getElementById('toMel').onclick=()=>assign(0);
-document.getElementById('toAcc').onclick=()=>assign(1);
+document.getElementById('toMel').onclick=()=>assign(true);
+document.getElementById('toAcc').onclick=()=>assign(false);
 document.getElementById('del').onclick=delSel;
 document.getElementById('undo').onclick=undo;
 document.getElementById('redo').onclick=redo;
@@ -481,8 +484,8 @@ function togglePlay(){
   playOffset=cursor;playT0=ctx.currentTime+0.05;playing=true;
   document.getElementById('play').textContent='⏹ 停止';
   for(const n of notes){
-    if(melodyOnly&&n.track!==0)continue;
-    if(!taud(n.track))continue;            // 🔊OFFのトラックは鳴らさない
+    if(melodyOnly&&!n.mel)continue;
+    if(!naud(n))continue;                  // 🔊OFFのトラックは鳴らさない
     if(tap&&tap.mute.has(n))continue;      // タップ修正中は対象ノートだけ消音
     if(n.t>=playOffset-0.001) toneAt(n, playT0+(n.t-playOffset));
   }
@@ -495,7 +498,7 @@ const TAP_LEADIN=3.0;   // 最初の対象ノートの何秒前から再生を�
 let tap=null;   // {queue:[対象ノート], mute:Set, idx}
 function startTap(){
   if(tap){endTap();return}
-  const targets=notes.filter(n=>n.track===0&&n.t>=cursor-1e-9)
+  const targets=notes.filter(n=>n.mel&&n.t>=cursor-1e-9)
                      .sort((a,b)=>a.t-b.t);
   if(!targets.length){alert('カーソル以降にメロディ(金色)がありません');return}
   snapshot();
@@ -550,11 +553,24 @@ function load(buf,name){
   let parsed;
   try{parsed=parseMidi(buf)}catch(err){alert('読み込み失敗: '+err);return}
   notes=parsed.notes;
+  // "melody"という名のトラックはマークとして取り込む(過去の書き出しや
+  // transcribe.pyの出力との互換)。実トラックからは外して詰め直す
+  let names=parsed.names;
+  const melIdx=names.findIndex(nm=>nm==='melody');
+  if(melIdx>=0){
+    const remap={};let j=0;
+    names.forEach((nm,i)=>{if(i!==melIdx)remap[i]=j++});
+    for(const n of notes){
+      if(n.track===melIdx){n.mel=true;n.track=0}
+      else n.track=remap[n.track];
+    }
+    names=names.filter((_,i)=>i!==melIdx);
+  }
+  if(!names.length)names=['accomp'];
+  melMeta={visible:true,audible:true};
   trackMeta=[];sel.clear();undoStack=[];redoStack=[];cursor=0;viewX=-10;
   ensureTracks();
-  if(parsed.singleTrack){                       // 1トラック曲: 名前は1へ
-    if(trackMeta[1]&&parsed.names[0])trackMeta[1].name=parsed.names[0];
-  }else parsed.names.forEach((nm,i)=>{if(trackMeta[i])trackMeta[i].name=nm});
+  names.forEach((nm,i)=>{if(trackMeta[i])trackMeta[i].name=nm});
   updateTrackPanel();
   const ps=notes.map(n=>n.p);
   viewY=(127-Math.max(...ps)-3)*rowH;
