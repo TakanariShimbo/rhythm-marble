@@ -55,13 +55,19 @@ DEFAULT_SF2 = "/usr/share/sounds/sf2/TimGM6mb.sf2"
 SAMPLE_RATE = 44100
 
 
-def extract_melody(midi_data, min_pitch: int = 0, group_ms: float = 80.0):
+def extract_melody(midi_data, min_pitch: int = 0, group_ms: float = 80.0,
+                   tie: str = "merge"):
     """主旋律だけを単音で抜き出す(スカイライン方式)。
 
     1. 低すぎるノート(伴奏・ベース)を除外
     2. ほぼ同時に鳴るノート群からは最高音だけを残す
     3. 高音が鳴っている間に始まる下の伴奏ノートを除外
     4. 前の音の尾を次の音の頭で切って完全な単音にする
+
+    tie: 同音で前の音に食い込むノートの扱い。
+      merge = 1音に結合(タイ表記のMIDI向け、従来どおり)
+      cut   = 結合せず前の音を切り詰める(同音連打を保持。歌モノの
+              編集済みMIDIで刻みが消えるのを防ぐ)
     """
     notes = [n for inst in midi_data.instruments for n in inst.notes
              if n.pitch >= min_pitch]
@@ -75,17 +81,18 @@ def extract_melody(midi_data, min_pitch: int = 0, group_ms: float = 80.0):
         if kept and kept[-1].end > n.start and kept[-1].pitch > n.pitch:
             continue  # 上のメロディが鳴っている最中の下の伴奏音は捨てる
         kept.append(n)
-    # タイ(同音で前の音に食い込んで続くノート)は1音に結合する。
-    # 打楽器系の音色では2打目が余計な音として鳴ってしまうため。
-    # 隙間0で隣接するのは同音連打(きらきら星のドド等)なので結合しない。
-    merged = []
-    for n in kept:
-        if merged and n.pitch == merged[-1].pitch \
-                and n.start < merged[-1].end - 0.01:
-            merged[-1].end = max(merged[-1].end, n.end)
-            continue
-        merged.append(n)
-    kept = merged
+    # タイ(同音で前の音に食い込んで続くノート)の扱い。
+    # 隙間0で隣接するのは同音連打(きらきら星のドド等)なのでどちらでも残る。
+    if tie == "merge":
+        merged = []
+        for n in kept:
+            if merged and n.pitch == merged[-1].pitch \
+                    and n.start < merged[-1].end - 0.01:
+                merged[-1].end = max(merged[-1].end, n.end)
+                continue
+            merged.append(n)
+        kept = merged
+    # tie=cut は後段の「前の音の尾を次の音の頭で切る」処理がそのまま担う
 
     for a, b in zip(kept, kept[1:]):
         if a.end > b.start:
@@ -237,6 +244,9 @@ def main():
                         help="主旋律だけを単音で抜き出す(動画同期向け)")
     parser.add_argument("--min-pitch", type=int, default=55,
                         help="--melody時にこれ未満の低音を捨てる (MIDIノート番号, デフォルト: 55=G3)")
+    parser.add_argument("--tie", choices=["merge", "cut"], default="merge",
+                        help="同音で食い込むノート: merge=タイとして結合(既定) / "
+                             "cut=前を切り詰めて連打を保持(歌モノの編集済みMIDI向け)")
     parser.add_argument("--long-note", choices=["keep", "cut", "split"],
                         default="keep",
                         help="長い音の扱い: keep=そのまま / cut=切り詰め / "
@@ -283,7 +293,7 @@ def main():
     print(f"[1/3] MIDI読み込み: {args.input} "
           f"({sum(len(i.notes) for i in midi_data.instruments)}ノート)")
     if args.melody:
-        midi_data = extract_melody(midi_data, args.min_pitch)
+        midi_data = extract_melody(midi_data, args.min_pitch, tie=args.tie)
     midi_data = process_long_notes(midi_data, args.long_note,
                                    args.long_note_len)
     midi_data = trim_leading_silence(midi_data)

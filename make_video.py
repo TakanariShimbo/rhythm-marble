@@ -70,14 +70,14 @@ LIGHT_DIR = LIGHT_DIR / np.linalg.norm(LIGHT_DIR)
 # ---------------------------------------------------------------- 物理
 
 def load_bounces(midi_path: Path, track, long_note="keep", long_note_len=0.5,
-                 min_pitch=55):
+                 min_pitch=55, tie="merge"):
     import pretty_midi
     pm = pretty_midi.PrettyMIDI(str(midi_path))
     if track is not None:
         idx = [int(x) for x in str(track).split(",")]
         pm.instruments = [pm.instruments[i] for i in idx]
-    # convert.py と同じmin_pitchで抽出しないと音源とバウンドがズレる
-    pm = extract_melody(pm, min_pitch=min_pitch)
+    # convert.py と同じmin_pitch/tieで抽出しないと音源とバウンドがズレる
+    pm = extract_melody(pm, min_pitch=min_pitch, tie=tie)
     pm = process_long_notes(pm, long_note, long_note_len)
     pm = trim_leading_silence(pm)
     notes = sorted(pm.instruments[0].notes, key=lambda n: n.start)
@@ -939,6 +939,8 @@ def main():
     parser.add_argument("-o", "--output", type=Path, required=True, help="出力MP4")
     parser.add_argument("--min-pitch", type=int, default=55,
                         help="これ未満の低音を捨てる(convert.pyと同値にすること)")
+    parser.add_argument("--tie", choices=["merge", "cut"], default="merge",
+                        help="同音タイの扱い(convert.pyと同値にすること)")
     parser.add_argument("--skip", type=float, default=0,
                         help="先頭N秒を捨てて詰める(convert.pyと同値にすること)")
     parser.add_argument("--speed", type=float, default=1.0,
@@ -958,7 +960,7 @@ def main():
 
     bounces = load_bounces(args.midi, args.track,
                            args.long_note, args.long_note_len,
-                           args.min_pitch)
+                           args.min_pitch, args.tie)
     end_time = bounces[-1][0]
     if args.duration:
         end_time = min(end_time, args.duration)
