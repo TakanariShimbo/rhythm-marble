@@ -25,6 +25,22 @@ cd rhythm-marble
 
 ## 使い方
 
+パイプライン本体(audio → preview → final)は「MIDIから」始まる。
+手元の素材に応じて、任意の**前処理ツール**(`tools/`)を手前に挟む:
+
+```
+パターンA: 完成したMIDIがある
+  song.mid ──────────────────────────────► pipeline.py audio → preview → final
+
+パターンB: MIDIはあるがメロディが混沌(多声・伴奏混在)
+  song.mid ──► tools/midi_editor.html ───► pipeline.py audio → ...
+               (メロディ/伴奏を手で仕分け)
+
+パターンC: ピアノ演奏の音源(mp3/mp4等)しかない
+  音源 ──► tools/transcribe.py ──► tools/midi_editor.html ──► pipeline.py audio → ...
+          (自動採譜)              (仕上げ)
+```
+
 ### 0. プロジェクトを作る
 
 ```bash
@@ -152,6 +168,32 @@ uv run python postfx_lab.py data/my-song/output/frames -o /tmp/fxlab
 構図の目安: 額(`dy +1.0`)/ 壁割れハッチ(start)/ タイトル(`dy -0.72`)で
 0秒フレームがサムネイルとして成立する。
 
+## 前処理ツール (tools/)
+
+### tools/transcribe.py — 音源→MIDI自動採譜
+
+ピアノ系の音源(mp3/wav/mp4/webm等)からMIDIを起こす。ByteDanceの
+高精度ピアノ採譜モデル(ノートF1≈0.97)を使用。依存(torch等)はスクリプト内の
+インラインメタデータで宣言されており、プロジェクトの環境には入らない。
+
+```bash
+uv run tools/transcribe.py 演奏動画.mp4 -o data/my-song/input/song.mid
+```
+
+出力は track0=メロディ候補(各瞬間の最高音) / track1=残り の2トラック。
+初回はモデル(約170MB)を自動ダウンロード。GPUがあれば速い(CPUだと曲の2〜3倍の時間)。
+
+### tools/midi_editor.html — MIDI編集GUI
+
+ブラウザで開くだけで動くピアノロールエディタ(依存なし)。採譜結果の
+メロディ仕分けや、既存MIDIの手直しに使う。
+
+- ノートの選択/移動/伸縮/追加/削除、全選択、戻す/進む
+- 選択を**メロディ(金)/伴奏(青)**に振り分け → 書き出すと track0=メロディ になり
+  そのまま `pipeline.py audio --track 0` に流せる
+- 「長さ統一」で選択ノートを左詰めで一定長に(減衰楽器では長さは音に影響しない)
+- celesta_hall相当の音で再生確認(メロディのみ再生も可)。操作方法は❔ボタン
+
 ## その他のコマンド
 
 ```bash
@@ -203,6 +245,8 @@ convert.py           MIDI→音源(フェーズ1の中身)
 make_video.py        物理+配置+検証+簡易レンダラー(フェーズ2の中身)
 blender_render.py    フォトリアル描画(フェーズ3の中身)
 postfx_lab.py        映像ポスト処理: 試作(比較シート)と全フレーム適用
+tools/transcribe.py  前処理: 音源→MIDI自動採譜(依存は独立、uv runで自動解決)
+tools/midi_editor.html 前処理: ブラウザで動くMIDI編集GUI(メロディ仕分け)
 setup.sh             vendor/ と .venv の再構築
 data/<プロジェクト>/  input/(ユーザー) と output/(生成物)
 data/twinkle-star/   サンプルプロジェクト(inputのみgit管理)
