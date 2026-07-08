@@ -86,7 +86,7 @@
     </table>
     <h3>タップ修正 🥁</h3>
     <table>
-      <tr><td>開始</td><td>🥁ボタン。伴奏だけ再生され、メロディは消音</td></tr>
+      <tr><td>開始</td><td>🥁ボタン。最初の対象ノートの3秒前から再生開始。打ち直す対象だけ消音(伴奏や手前のメロディは鳴る)</td></tr>
       <tr><td>任意のキー</td><td>叩いた瞬間に次のメロディノート(赤枠)の開始位置が打ち直される</td></tr>
       <tr><td><kbd>Space</kbd> / <kbd>Esc</kbd></td><td>途中終了(残りは元のまま)。<kbd>Ctrl+Z</kbd>で全部戻せる</td></tr>
       <tr><td>途中から</td><td>空白クリックで赤線を置いてから🥁 → それ以降だけ修正</td></tr>
@@ -407,7 +407,7 @@ function togglePlay(){
   document.getElementById('play').textContent='⏹ 停止';
   for(const n of notes){
     if(melodyOnly&&n.track!==0)continue;
-    if(tap&&n.track===0)continue;          // タップ修正中はメロディを消音
+    if(tap&&tap.mute.has(n))continue;      // タップ修正中は対象ノートだけ消音
     if(n.t>=playOffset-0.001) toneAt(n, playT0+(n.t-playOffset));
   }
   animate();
@@ -415,7 +415,8 @@ function togglePlay(){
 // ---------- タップ修正モード ----------
 // 伴奏を聴きながら任意のキーを叩くと、メロディノートの開始時刻が
 // 叩いたタイミングで1音ずつ(時刻順に)打ち直される。音程・長さは不変。
-let tap=null;   // {queue:[対象ノート], idx}
+const TAP_LEADIN=3.0;   // 最初の対象ノートの何秒前から再生を始めるか
+let tap=null;   // {queue:[対象ノート], mute:Set, idx}
 function startTap(){
   if(tap){endTap();return}
   const targets=notes.filter(n=>n.track===0&&n.t>=cursor-1e-9)
@@ -423,7 +424,8 @@ function startTap(){
   if(!targets.length){alert('カーソル以降にメロディ(金色)がありません');return}
   snapshot();
   if(playing)stopPlay();
-  tap={queue:targets,idx:0};
+  tap={queue:targets,mute:new Set(targets),idx:0};
+  cursor=Math.max(0,targets[0].t-TAP_LEADIN);   // 助走: 少し手前から流す
   document.getElementById('tapBtn').classList.add('active');
   togglePlay();
 }
