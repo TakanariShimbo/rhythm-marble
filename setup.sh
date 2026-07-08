@@ -2,6 +2,14 @@
 # vendor/ の再構築(消してもこれ一発で戻る)
 set -e
 cd "$(dirname "$0")"
+
+# ---- システム依存の事前チェック(なくても続行するが警告する) ----
+command -v ffmpeg >/dev/null || \
+  echo "⚠ ffmpeg が見つかりません: sudo apt install ffmpeg"
+ldconfig -p 2>/dev/null | grep -q libfluidsynth || \
+  echo "⚠ libfluidsynth が見つかりません(フェーズ1が動きません): sudo apt install libfluidsynth3"
+[ -f /usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc ] || \
+  echo "⚠ Noto CJKフォントが見つかりません(銘板の日本語が化けます): sudo apt install fonts-noto-cjk"
 mkdir -p vendor
 if [ ! -f vendor/FluidR3_GM.sf2 ]; then
   echo "サウンドフォントをダウンロード中..."
