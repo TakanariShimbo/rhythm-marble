@@ -11,7 +11,7 @@ fi
 if [ ! -e vendor/bpy-venv/bin/python ]; then
   echo "Blender(bpy)をインストール中(約900MB)..."
   uv venv vendor/bpy-venv --python 3.11
-  uv pip install --python vendor/bpy-venv/bin/python bpy numpy
+  uv pip install --python vendor/bpy-venv/bin/python "bpy==5.0.*" numpy
 fi
 uv sync   # メインのPython環境
 echo "セットアップ完了"
