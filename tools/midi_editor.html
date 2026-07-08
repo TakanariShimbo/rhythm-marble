@@ -119,22 +119,26 @@
     </table>
   </div>
 </div>
-<div id="status"><span id="stat"></span><span>❔=操作方法 / <span style="color:#e8b34a">■</span>メロディ <span style="color:#5f87b8">■</span>伴奏</span></div>
+<div id="status"><span id="stat"></span><span>❔=操作方法 / <span style="color:#e8b34a">★金=メロディ(track0・動画のバウンドになる。色は固定)</span> / 他トラックの色は左上パネルで変更可</span></div>
 <script>
 "use strict";
 // ---------- state ----------
 let notes = [];            // {t,d,p,v,track} track:0=melody(慣例) 1..=その他
 let sel = new Set();
-// トラックごとの表示設定。0=メロディは金色固定スタート
-const PALETTE=['#e8b34a','#5f87b8','#5fb89a','#c97b9e','#9a7bd4',
-               '#d4915a','#7bc4d4','#8b95a8'];
+// トラックごとの表示設定。
+// ルール: 金色(MELODY_COLOR)は「メロディ=track0」の予約色で変更不可。
+// 他トラックはPALETTE(金を含まない)から自由に変更できる
+const MELODY_COLOR='#e8b34a';
+const PALETTE=['#5f87b8','#5fb89a','#c97b9e','#9a7bd4',
+               '#d4915a','#7bc4d4','#8b95a8','#b8b85f'];
 let trackMeta = [];        // {name,color,visible,audible}
 function ensureTracks(){
   const maxT = notes.length ? Math.max(...notes.map(n=>n.track)) : 0;
   while(trackMeta.length<=maxT){
     const i=trackMeta.length;
     trackMeta.push({name:i===0?'melody':'track'+i,
-                    color:PALETTE[i%PALETTE.length],visible:true,audible:true});
+                    color:i===0?MELODY_COLOR:PALETTE[(i-1)%PALETTE.length],
+                    visible:true,audible:true});
   }
   updateTrackPanel();
 }
@@ -148,9 +152,15 @@ function updateTrackPanel(){
     const cnt=notes.filter(n=>n.track===i).length;
     const row=document.createElement('div');row.className='trow';
     const sw=document.createElement('span');sw.className='sw';
-    sw.style.background=tm.color;sw.title='クリックで色変更';
-    sw.onclick=()=>{const j=(PALETTE.indexOf(tm.color)+1)%PALETTE.length;
-      tm.color=PALETTE[j];updateTrackPanel();draw()};
+    sw.style.background=tm.color;
+    if(i===0){
+      sw.title='メロディの金色は固定(意味を持つ予約色)';
+      sw.style.cursor='default';
+    }else{
+      sw.title='クリックで色変更';
+      sw.onclick=()=>{const j=(PALETTE.indexOf(tm.color)+1)%PALETTE.length;
+        tm.color=PALETTE[j];updateTrackPanel();draw()};
+    }
     const eye=document.createElement('span');eye.className='tbtn'+(tm.visible?' on':'');
     eye.textContent='👁';eye.title='表示/非表示';
     eye.onclick=()=>{tm.visible=!tm.visible;
@@ -160,7 +170,8 @@ function updateTrackPanel(){
     spk.textContent='🔊';spk.title='再生する/しない';
     spk.onclick=()=>{tm.audible=!tm.audible;updateTrackPanel()};
     const nm=document.createElement('span');nm.className='tname';
-    nm.textContent=`${i}: ${tm.name} (${cnt})`;
+    nm.textContent=`${i===0?'★':i+':'} ${tm.name} (${cnt})`;
+    if(i===0)nm.style.color=MELODY_COLOR;
     row.append(sw,eye,spk,nm);
     el.appendChild(row);
   });
