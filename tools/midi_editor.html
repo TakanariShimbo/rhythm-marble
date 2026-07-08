@@ -181,6 +181,7 @@ function updateTrackPanel(){
 }
 let viewX = 0, pxPerSec = 90, rowH = 12, viewY = 40*12;  // viewY: px offset from pitch 127 top
 let cursor = 0, playing = false, playT0 = 0, playOffset = 0, ctx = null, master = null;
+let sched = null;   // 先読みスケジューラのタイマー
 let undoStack = [];
 const cv = document.getElementById('cv'), g = cv.getContext('2d');
 const wrap = document.getElementById('wrap'), drop = document.getElementById('drop');
@@ -483,12 +484,24 @@ function togglePlay(){
   const melodyOnly=document.getElementById('melodyOnly').classList.contains('active');
   playOffset=cursor;playT0=ctx.currentTime+0.05;playing=true;
   document.getElementById('play').textContent='⏹ 停止';
-  for(const n of notes){
-    if(melodyOnly&&!n.mel)continue;
-    if(!naud(n))continue;                  // 🔊OFFのトラックは鳴らさない
-    if(tap&&tap.mute.has(n))continue;      // タップ修正中は対象ノートだけ消音
-    if(n.t>=playOffset-0.001) toneAt(n, playT0+(n.t-playOffset));
-  }
+  // 先読みスケジューラ: 全ノートを一括予約すると数千オシレータが同時生成
+  // されて固まるため、常に0.8秒先までだけ予約し200msごとに補充する
+  const list=notes.filter(n=>n.t>=playOffset-0.001)
+                  .sort((a,b)=>a.t-b.t);
+  let i=0;
+  const pump=()=>{
+    if(!playing)return;
+    const horizon=playOffset+(ctx.currentTime-playT0)+0.8;
+    while(i<list.length&&list[i].t<=horizon){
+      const n=list[i++];
+      if(melodyOnly&&!n.mel)continue;
+      if(!naud(n))continue;                // 🔊OFFのトラックは鳴らさない
+      if(tap&&tap.mute.has(n))continue;    // タップ修正中は対象ノートだけ消音
+      toneAt(n, playT0+(n.t-playOffset));
+    }
+  };
+  pump();
+  sched=setInterval(pump,200);
   animate();
 }
 // ---------- タップ修正モード ----------
@@ -529,6 +542,7 @@ function endTap(){
 document.getElementById('tapBtn').onclick=startTap;
 function stopPlay(){
   playing=false;if(ctx){ctx.close();ctx=null}
+  if(sched){clearInterval(sched);sched=null}
   if(tap){tap=null;document.getElementById('tapBtn').classList.remove('active')}
   document.getElementById('play').textContent='▶ 再生';
   draw();
