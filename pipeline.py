@@ -151,7 +151,8 @@ def mv_args(midi: Path, cfg: dict, args):
     mv = [sys.executable, ROOT / "make_video.py", midi,
           "--track", cfg["track"],
           "--long-note", cfg.get("long_note", "keep"),
-          "--long-note-len", cfg.get("long_note_len", 0.5)]
+          "--long-note-len", cfg.get("long_note_len", 0.5),
+          "--min-pitch", cfg.get("min_pitch", 55)]
     duration = args.duration or cfg.get("max_len")
     if duration:
         mv += ["--duration", duration]
