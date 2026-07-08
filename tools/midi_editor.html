@@ -8,57 +8,97 @@
   }
   html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
     font-family:system-ui,sans-serif;overflow:hidden}
-  #bar{display:flex;gap:.6rem;align-items:center;padding:.5rem .8rem;
-    background:var(--panel);border-bottom:1px solid var(--rule);flex-wrap:wrap}
-  #bar b{font-size:.95rem;letter-spacing:.02em}
-  button,label.btn{background:#31363f;color:var(--ink);border:1px solid var(--rule);
-    border-radius:4px;padding:.32rem .7rem;font-size:.82rem;cursor:pointer}
+  body{display:flex;flex-direction:column}
+  #bar{display:flex;gap:.7rem;align-items:center;padding:.45rem .8rem;
+    background:var(--panel);border-bottom:1px solid var(--rule)}
+  #bar b{font-size:.95rem;letter-spacing:.02em;margin-right:.2rem}
+  .grp{display:flex;gap:.3rem;align-items:center;background:#1f2329;
+    border:1px solid var(--rule);border-radius:7px;padding:.22rem .35rem}
+  button,label.btn{background:#31363f;color:var(--ink);border:1px solid transparent;
+    border-radius:4px;padding:.3rem .65rem;font-size:.82rem;cursor:pointer;white-space:nowrap}
   button:hover,label.btn:hover{background:#3a404b}
-  button.primary{background:var(--melody);color:#1b1e23;border-color:transparent;font-weight:600}
+  button.primary{background:var(--melody);color:#1b1e23;font-weight:600}
+  button.toggle.active{background:#4a4030;border-color:var(--melody);color:var(--melody)}
   #bar .sp{flex:1}
-  #bar .div{width:1px;height:1.4rem;background:var(--rule);margin:0 .25rem}
-  #bar .chk{font-size:.8rem;display:flex;align-items:center;gap:.3em}
-  #bar input[type=number]{width:4.2em;background:#31363f;color:var(--ink);
-    border:1px solid var(--rule);border-radius:4px;padding:.28rem .3rem;font-size:.82rem}
-  #hint{font-size:.75rem;color:var(--sub);padding:.35rem .8rem;background:var(--panel);
-    border-bottom:1px solid var(--rule)}
-  #wrap{position:relative;height:calc(100% - 86px)}
+  #bar input[type=number]{width:4em;background:#31363f;color:var(--ink);
+    border:1px solid var(--rule);border-radius:4px;padding:.26rem .3rem;font-size:.82rem}
+  #wrap{position:relative;flex:1;min-height:0}
   canvas{display:block;width:100%;height:100%;cursor:default}
   #drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     color:var(--sub);font-size:1rem;pointer-events:none}
   input[type=file]{display:none}
-  .stat{font-size:.78rem;color:var(--sub)}
+  #status{display:flex;justify-content:space-between;padding:.25rem .8rem;
+    background:var(--panel);border-top:1px solid var(--rule);
+    font-size:.76rem;color:var(--sub)}
   kbd{background:#2e333c;border:1px solid var(--rule);border-radius:3px;
-    padding:0 .3em;font-size:.9em}
+    padding:0 .35em;font-size:.9em}
+  #helpPanel{position:absolute;top:.5rem;right:.5rem;z-index:9;width:440px;max-width:90vw;
+    background:var(--panel);border:1px solid var(--rule);border-radius:8px;
+    padding:1rem 1.2rem;box-shadow:0 8px 30px #000a;display:none}
+  #helpPanel.open{display:block}
+  #helpPanel h3{margin:.2rem 0 .5rem;font-size:.85rem;color:var(--melody);
+    letter-spacing:.04em}
+  #helpPanel table{width:100%;border-collapse:collapse;font-size:.8rem}
+  #helpPanel td{padding:.18rem .3rem;color:var(--ink)}
+  #helpPanel td:first-child{color:var(--sub);white-space:nowrap;width:11em}
 </style>
 <div id="bar">
   <b>🔮 MIDI Editor</b>
-  <span class="div"></span>
-  <button id="play">▶ 再生 <kbd>Space</kbd></button>
-  <label class="chk"><input type="checkbox" id="melodyOnly"> メロディのみ</label>
-  <span class="div"></span>
-  <button id="selAll" title="Ctrl+A">全選択</button>
-  <button id="toMel" title="M">→メロディ</button>
-  <button id="toAcc" title="A">→伴奏</button>
-  <button id="squash" title="L">⇤ 長さ統一</button>
-  <input type="number" id="squashLen" value="0.30" min="0.05" max="2" step="0.05"
-    title="統一する長さ(秒)">
-  <button id="del">削除 <kbd>Del</kbd></button>
-  <span class="div"></span>
-  <button id="undo" title="Ctrl+Z">↩ 戻す</button>
-  <button id="redo" title="Ctrl+Y">↪ 進む</button>
+  <span class="grp" title="再生">
+    <button id="rw" title="先頭へ">⏮</button>
+    <button id="play">▶ 再生</button>
+    <button id="melodyOnly" class="toggle" title="メロディだけ聴く">🎼 メロディのみ</button>
+  </span>
+  <span class="grp" title="編集">
+    <button id="selAll" title="全選択 (Ctrl+A)">全選択</button>
+    <button id="toMel" title="選択をメロディへ (M)">→メロディ</button>
+    <button id="toAcc" title="選択を伴奏へ (A)">→伴奏</button>
+    <button id="squash" title="選択を左詰めで一定長に (L)">⇤ 長さ統一</button>
+    <input type="number" id="squashLen" value="0.30" min="0.05" max="2" step="0.05"
+      title="統一する長さ(秒)">
+    <button id="del" title="選択を削除 (Del)">削除</button>
+  </span>
+  <span class="grp" title="履歴">
+    <button id="undo" title="戻す (Ctrl+Z)">↩</button>
+    <button id="redo" title="進む (Ctrl+Y)">↪</button>
+  </span>
   <span class="sp"></span>
-  <label class="btn">📂 開く<input type="file" id="file" accept=".mid,.midi"></label>
-  <button class="primary" id="save">💾 書き出し</button>
+  <button id="help" title="操作方法">❔</button>
+  <span class="grp" title="ファイル">
+    <label class="btn">📂 開く<input type="file" id="file" accept=".mid,.midi"></label>
+    <button class="primary" id="save">💾 書き出し</button>
+  </span>
 </div>
-<div id="hint">
-  <span class="stat" id="stat" style="float:right"></span>
-  ドラッグ=範囲選択 / ノートをドラッグ=移動 / 右端ドラッグ=長さ / ダブルクリック=追加(メロディ) /
-  <kbd>M</kbd> メロディ化 <kbd>A</kbd> 伴奏化 <kbd>L</kbd> 長さ統一(左詰め) <kbd>Del</kbd> 削除 <kbd>←→↑↓</kbd> 微調整
-  <kbd>Ctrl+Z</kbd> 戻す <kbd>Ctrl+Y</kbd> 進む / ホイール=縦 <kbd>Shift</kbd>+ホイール=横 <kbd>Ctrl</kbd>+ホイール=ズーム
-  中/右ボタンドラッグ=自由パン / 書き出しは track0=メロディ, track1=伴奏
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div id="drop">.mid をここにドラッグ&ドロップ</div>
+  <div id="helpPanel">
+    <h3>マウス</h3>
+    <table>
+      <tr><td>ドラッグ</td><td>範囲選択(Shiftで追加選択)</td></tr>
+      <tr><td>ノートをドラッグ</td><td>移動 / 右端をドラッグで長さ変更</td></tr>
+      <tr><td>ダブルクリック</td><td>ノート追加(メロディ)</td></tr>
+      <tr><td>中/右ボタンドラッグ</td><td>画面を自由に移動(パン)</td></tr>
+      <tr><td>ホイール</td><td>縦スクロール / <kbd>Shift</kbd>+で横 / <kbd>Ctrl</kbd>+でズーム</td></tr>
+      <tr><td>空白クリック</td><td>再生開始位置(赤線)をセット</td></tr>
+    </table>
+    <h3>キーボード</h3>
+    <table>
+      <tr><td><kbd>Space</kbd></td><td>再生 / 停止</td></tr>
+      <tr><td><kbd>M</kbd> / <kbd>A</kbd></td><td>選択をメロディ / 伴奏へ</td></tr>
+      <tr><td><kbd>L</kbd></td><td>選択を左詰めで一定長に</td></tr>
+      <tr><td><kbd>Del</kbd></td><td>選択を削除</td></tr>
+      <tr><td><kbd>←→↑↓</kbd></td><td>選択を微調整(時間/音程)</td></tr>
+      <tr><td><kbd>Ctrl+A</kbd> / <kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd></td><td>全選択 / 戻す / 進む</td></tr>
+    </table>
+    <h3>書き出し</h3>
+    <table>
+      <tr><td>track0(金色)</td><td>メロディ → pipeline.py audio --track 0</td></tr>
+      <tr><td>track1(青色)</td><td>伴奏</td></tr>
+    </table>
+  </div>
 </div>
-<div id="wrap"><canvas id="cv"></canvas><div id="drop">.mid をここにドラッグ&ドロップ</div></div>
+<div id="status"><span id="stat"></span><span>❔=操作方法 / <span style="color:#e8b34a">■</span>メロディ <span style="color:#5f87b8">■</span>伴奏</span></div>
 <script>
 "use strict";
 // ---------- state ----------
@@ -343,7 +383,7 @@ function togglePlay(){
   master.connect(dry).connect(comp);
   master.connect(conv).connect(wet).connect(comp);
   comp.connect(ctx.destination);
-  const melodyOnly=document.getElementById('melodyOnly').checked;
+  const melodyOnly=document.getElementById('melodyOnly').classList.contains('active');
   playOffset=cursor;playT0=ctx.currentTime+0.05;playing=true;
   document.getElementById('play').textContent='⏹ 停止';
   for(const n of notes){
@@ -354,9 +394,7 @@ function togglePlay(){
 }
 function stopPlay(){
   playing=false;if(ctx){ctx.close();ctx=null}
-  document.getElementById('play').textContent='▶ 再生 ';
-  const k=document.createElement('kbd');k.textContent='Space';
-  document.getElementById('play').appendChild(k);
+  document.getElementById('play').textContent='▶ 再生';
   draw();
 }
 function animate(){
@@ -369,6 +407,11 @@ function animate(){
   draw();requestAnimationFrame(animate);
 }
 document.getElementById('play').onclick=togglePlay;
+document.getElementById('melodyOnly').onclick=e=>e.target.classList.toggle('active');
+document.getElementById('rw').onclick=()=>{if(playing)stopPlay();cursor=0;viewX=-10;draw()};
+const helpPanel=document.getElementById('helpPanel');
+document.getElementById('help').onclick=()=>helpPanel.classList.toggle('open');
+addEventListener('keydown',e=>{if(e.key==='Escape')helpPanel.classList.remove('open')});
 // ---------- file io ----------
 function load(buf,name){
   try{notes=parseMidi(buf)}catch(err){alert('読み込み失敗: '+err);return}
