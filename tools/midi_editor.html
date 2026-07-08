@@ -32,6 +32,17 @@
     font-size:.76rem;color:var(--sub)}
   kbd{background:#2e333c;border:1px solid var(--rule);border-radius:3px;
     padding:0 .35em;font-size:.9em}
+  #trackPanel{position:absolute;top:.5rem;left:.5rem;z-index:8;
+    background:#24282fee;border:1px solid var(--rule);border-radius:7px;
+    padding:.4rem .55rem;font-size:.75rem;display:flex;flex-direction:column;
+    gap:.2rem;max-height:45%;overflow-y:auto}
+  #trackPanel:empty{display:none}
+  .trow{display:flex;align-items:center;gap:.4rem}
+  .sw{width:.9em;height:.9em;border-radius:3px;cursor:pointer;
+    border:1px solid #0007;flex:none}
+  .tbtn{cursor:pointer;opacity:.25;user-select:none}
+  .tbtn.on{opacity:1}
+  .tname{color:var(--sub);white-space:nowrap}
   #helpPanel{position:absolute;top:.5rem;right:.5rem;z-index:9;width:440px;max-width:90vw;
     background:var(--panel);border:1px solid var(--rule);border-radius:8px;
     padding:1rem 1.2rem;box-shadow:0 8px 30px #000a;display:none}
@@ -74,6 +85,7 @@
 <div id="wrap">
   <canvas id="cv"></canvas>
   <div id="drop">.mid をここにドラッグ&ドロップ</div>
+  <div id="trackPanel"></div>
   <div id="helpPanel">
     <h3>マウス</h3>
     <table>
@@ -111,8 +123,48 @@
 <script>
 "use strict";
 // ---------- state ----------
-let notes = [];            // {t,d,p,v,track} track:0=melody 1=accomp
+let notes = [];            // {t,d,p,v,track} track:0=melody(慣例) 1..=その他
 let sel = new Set();
+// トラックごとの表示設定。0=メロディは金色固定スタート
+const PALETTE=['#e8b34a','#5f87b8','#5fb89a','#c97b9e','#9a7bd4',
+               '#d4915a','#7bc4d4','#8b95a8'];
+let trackMeta = [];        // {name,color,visible,audible}
+function ensureTracks(){
+  const maxT = notes.length ? Math.max(...notes.map(n=>n.track)) : 0;
+  while(trackMeta.length<=maxT){
+    const i=trackMeta.length;
+    trackMeta.push({name:i===0?'melody':'track'+i,
+                    color:PALETTE[i%PALETTE.length],visible:true,audible:true});
+  }
+  updateTrackPanel();
+}
+function tcol(i){return (trackMeta[i]||{color:'#888'}).color}
+function tvis(i){return !trackMeta[i]||trackMeta[i].visible}
+function taud(i){return !trackMeta[i]||trackMeta[i].audible}
+function updateTrackPanel(){
+  const el=document.getElementById('trackPanel');
+  el.innerHTML='';
+  trackMeta.forEach((tm,i)=>{
+    const cnt=notes.filter(n=>n.track===i).length;
+    const row=document.createElement('div');row.className='trow';
+    const sw=document.createElement('span');sw.className='sw';
+    sw.style.background=tm.color;sw.title='クリックで色変更';
+    sw.onclick=()=>{const j=(PALETTE.indexOf(tm.color)+1)%PALETTE.length;
+      tm.color=PALETTE[j];updateTrackPanel();draw()};
+    const eye=document.createElement('span');eye.className='tbtn'+(tm.visible?' on':'');
+    eye.textContent='👁';eye.title='表示/非表示';
+    eye.onclick=()=>{tm.visible=!tm.visible;
+      if(!tm.visible)for(const n of [...sel])if(n.track===i)sel.delete(n);
+      updateTrackPanel();draw()};
+    const spk=document.createElement('span');spk.className='tbtn'+(tm.audible?' on':'');
+    spk.textContent='🔊';spk.title='再生する/しない';
+    spk.onclick=()=>{tm.audible=!tm.audible;updateTrackPanel()};
+    const nm=document.createElement('span');nm.className='tname';
+    nm.textContent=`${i}: ${tm.name} (${cnt})`;
+    row.append(sw,eye,spk,nm);
+    el.appendChild(row);
+  });
+}
 let viewX = 0, pxPerSec = 90, rowH = 12, viewY = 40*12;  // viewY: px offset from pitch 127 top
 let cursor = 0, playing = false, playT0 = 0, playOffset = 0, ctx = null, master = null;
 let undoStack = [];
@@ -123,9 +175,11 @@ let redoStack = [];
 function snapshot(){ undoStack.push(JSON.stringify(notes)); redoStack.length=0;
   if(undoStack.length>100) undoStack.shift(); }
 function undo(){ const s = undoStack.pop();
-  if(s){ redoStack.push(JSON.stringify(notes)); notes = JSON.parse(s); sel.clear(); draw(); } }
+  if(s){ redoStack.push(JSON.stringify(notes)); notes = JSON.parse(s);
+    sel.clear(); ensureTracks(); updateTrackPanel(); draw(); } }
 function redo(){ const s = redoStack.pop();
-  if(s){ undoStack.push(JSON.stringify(notes)); notes = JSON.parse(s); sel.clear(); draw(); } }
+  if(s){ undoStack.push(JSON.stringify(notes)); notes = JSON.parse(s);
+    sel.clear(); ensureTracks(); updateTrackPanel(); draw(); } }
 
 // ---------- MIDI parse ----------
 function parseMidi(buf){
@@ -135,7 +189,7 @@ function parseMidi(buf){
   if(u32()!==0x4d546864) throw 'not MIDI'; u32();
   const fmt=u16(), ntr=u16(), div=u16();
   if(div&0x8000) throw 'SMPTE未対応';
-  const tempos=[{tick:0,us:500000}], raw=[];
+  const tempos=[{tick:0,us:500000}], raw=[], srcNames={};
   for(let tr=0;tr<ntr;tr++){
     if(u32()!==0x4d54726b) throw 'track?';
     const len=u32(), end=pos+len; let tick=0, run=0;
@@ -145,6 +199,8 @@ function parseMidi(buf){
       const type=st&0xf0;
       if(st===0xff){const mt=u8(),l=vlq();
         if(mt===0x51){const a=u8(),b=u8(),c=u8();tempos.push({tick,us:(a<<16)|(b<<8)|c})}
+        else if(mt===0x03){let s='';for(let i=0;i<l;i++)s+=String.fromCharCode(u8());
+          srcNames[tr]=s}
         else pos+=l;
       } else if(st===0xf0||st===0xf7){pos+=vlq()}
       else if(type===0x90||type===0x80){const p=u8(),v=u8();
@@ -164,10 +220,12 @@ function parseMidi(buf){
   const t2s=tk=>{let s=seg[0];for(const x of seg){if(x.tick<=tk)s=x;else break}return s.sec+(tk-s.tick)*s.spt};
   const out=[], open={};
   raw.sort((a,b)=>a.tick-b.tick||(a.on?1:-1));
-  // ノートを含むトラックが複数あれば先頭をメロディ(0)、それ以外を伴奏(1)に。
-  // 1トラックだけなら全部伴奏スタート(メロディはユーザーが選ぶ)
+  // ノートを含むトラックを順序を保って0,1,2...に振り直す(潰さない)。
+  // 慣例: track0=メロディ。1トラックだけの場合は「未仕分け」として1へ
   const noteTracks=[...new Set(raw.map(e=>e.tr))].sort((a,b)=>a-b);
-  const trackOf=tr=>(noteTracks.length>1&&tr===noteTracks[0])?0:1;
+  const trackOf=tr=>noteTracks.length>1?noteTracks.indexOf(tr):1;
+  const names=noteTracks.map((tr,i)=>srcNames[tr]||
+    (noteTracks.length>1&&i===0?'melody':'track'+(noteTracks.length>1?i:1)));
   for(const e of raw){
     const k=e.tr+':'+e.p;
     if(e.on){ if(open[k]) close(open[k],e.tick); open[k]={tick:e.tick,p:e.p,v:e.v,tr:e.tr}; }
@@ -178,7 +236,7 @@ function parseMidi(buf){
     if(t1-t0>0.01) out.push({t:t0,d:t1-t0,p:o.p,v:o.v,track:trackOf(o.tr)});
   }
   for(const k in open) close(open[k], open[k].tick+div);
-  return out;
+  return {notes:out, names, singleTrack:noteTracks.length===1};
 }
 // ---------- MIDI write (format1, 480ppq, 120bpm) ----------
 function writeMidi(){
@@ -195,8 +253,11 @@ function writeMidi(){
     return bytes;
   }
   const t0=[0,0xff,0x51,3,0x07,0xa1,0x20,0,0xff,0x2f,0]; // tempo120
-  const trks=[t0,track(notes.filter(n=>n.track===0),'melody'),
-              track(notes.filter(n=>n.track===1),'accomp')];
+  const nT=Math.max(1,...notes.map(n=>n.track))+1;
+  const trks=[t0];
+  for(let i=0;i<nT;i++)
+    trks.push(track(notes.filter(n=>n.track===i),
+                    (trackMeta[i]&&trackMeta[i].name)||('track'+i)));
   const head=[0x4d,0x54,0x68,0x64,0,0,0,6,0,1,0,trks.length,PPQ>>8,PPQ&0xff];
   const out=[...head];
   for(const t of trks){out.push(0x4d,0x54,0x72,0x6b,t.length>>>24&255,t.length>>>16&255,t.length>>>8&255,t.length&255,...t)}
@@ -222,10 +283,10 @@ function draw(){
     g.fillStyle=s%5?'var(--grid)':'#39404a';g.fillStyle=s%5?'#2a2f37':'#39404a';g.fillRect(x,0,1,H);
     if(s%5===0){g.fillStyle='#6b7280';g.font='10px system-ui';g.fillText(s+'s',x+3,12)}}
   for(const n of notes){
+    if(!tvis(n.track))continue;
     const x=s2x(n.t),y=p2y(n.p),w=Math.max(3,n.d*pxPerSec);
     if(x>W||x+w<0||y>H||y<-rowH)continue;
-    g.fillStyle=n.track===0?'var(--melody)':'var(--accomp)';
-    g.fillStyle=n.track===0?'#e8b34a':'#5f87b8';
+    g.fillStyle=tcol(n.track);
     g.globalAlpha=.92;g.fillRect(x,y+1,w,rowH-2);g.globalAlpha=1;
     if(sel.has(n)){g.strokeStyle='#fff';g.lineWidth=1.4;g.strokeRect(x+.5,y+1.5,w-1,rowH-3)}
   }
@@ -239,13 +300,13 @@ function draw(){
   const px=s2x(playing?playOffset+(ctx.currentTime-playT0):cursor);
   g.fillStyle='#e05a4e';g.fillRect(px,0,1.5,H);
   document.getElementById('stat').textContent=
-    `メロディ ${notes.filter(n=>n.track===0).length} / 伴奏 ${notes.filter(n=>n.track===1).length}ノート`+
-    (sel.size?` / 選択 ${sel.size}`:'');
+    `全${notes.length}ノート`+(sel.size?` / 選択 ${sel.size}`:'');
 }
 // ---------- interaction ----------
 let drag=null, rubber=null;
 function hit(mx,my){
   for(let i=notes.length-1;i>=0;i--){const n=notes[i];
+    if(!tvis(n.track))continue;
     const x=s2x(n.t),y=p2y(n.p),w=Math.max(3,n.d*pxPerSec);
     if(mx>=x&&mx<=x+w&&my>=y&&my<=y+rowH) return n}
   return null;
@@ -283,6 +344,7 @@ addEventListener('mouseup',()=>{
     const[a,b]=[Math.min(rubber.x0,rubber.x1),Math.max(rubber.x0,rubber.x1)];
     const[c,dd]=[Math.min(rubber.y0,rubber.y1),Math.max(rubber.y0,rubber.y1)];
     if(b-a>4||dd-c>4)for(const n of notes){
+      if(!tvis(n.track))continue;
       const x=s2x(n.t),y=p2y(n.p),w=Math.max(3,n.d*pxPerSec);
       if(x+w>=a&&x<=b&&y+rowH>=c&&y<=dd)sel.add(n);
     }
@@ -293,7 +355,7 @@ addEventListener('mouseup',()=>{
 cv.addEventListener('dblclick',e=>{
   snapshot();
   const n={t:x2s(e.offsetX),d:0.3,p:y2p(e.offsetY),v:90,track:0};
-  notes.push(n);sel.clear();sel.add(n);draw();
+  notes.push(n);sel.clear();sel.add(n);ensureTracks();draw();
 });
 cv.addEventListener('wheel',e=>{
   e.preventDefault();
@@ -344,7 +406,8 @@ addEventListener('keydown',e=>{
     draw();
   }
 });
-function assign(tr){if(!sel.size)return;snapshot();for(const n of sel)n.track=tr;draw()}
+function assign(tr){if(!sel.size)return;snapshot();for(const n of sel)n.track=tr;
+  ensureTracks();draw()}
 function squash(){
   if(!sel.size)return;
   const len=parseFloat(document.getElementById('squashLen').value)||0.3;
@@ -353,9 +416,10 @@ function squash(){
   draw();
 }
 document.getElementById('squash').onclick=squash;
-function selectAll(){sel=new Set(notes);draw()}
+function selectAll(){sel=new Set(notes.filter(n=>tvis(n.track)));draw()}
 document.getElementById('selAll').onclick=selectAll;
-function delSel(){if(!sel.size)return;snapshot();notes=notes.filter(n=>!sel.has(n));sel.clear();draw()}
+function delSel(){if(!sel.size)return;snapshot();notes=notes.filter(n=>!sel.has(n));
+  sel.clear();updateTrackPanel();draw()}
 document.getElementById('toMel').onclick=()=>assign(0);
 document.getElementById('toAcc').onclick=()=>assign(1);
 document.getElementById('del').onclick=delSel;
@@ -407,6 +471,7 @@ function togglePlay(){
   document.getElementById('play').textContent='⏹ 停止';
   for(const n of notes){
     if(melodyOnly&&n.track!==0)continue;
+    if(!taud(n.track))continue;            // 🔊OFFのトラックは鳴らさない
     if(tap&&tap.mute.has(n))continue;      // タップ修正中は対象ノートだけ消音
     if(n.t>=playOffset-0.001) toneAt(n, playT0+(n.t-playOffset));
   }
@@ -471,8 +536,15 @@ document.getElementById('help').onclick=()=>helpPanel.classList.toggle('open');
 addEventListener('keydown',e=>{if(e.key==='Escape')helpPanel.classList.remove('open')});
 // ---------- file io ----------
 function load(buf,name){
-  try{notes=parseMidi(buf)}catch(err){alert('読み込み失敗: '+err);return}
-  sel.clear();undoStack=[];cursor=0;viewX=-10;
+  let parsed;
+  try{parsed=parseMidi(buf)}catch(err){alert('読み込み失敗: '+err);return}
+  notes=parsed.notes;
+  trackMeta=[];sel.clear();undoStack=[];redoStack=[];cursor=0;viewX=-10;
+  ensureTracks();
+  if(parsed.singleTrack){                       // 1トラック曲: 名前は1へ
+    if(trackMeta[1]&&parsed.names[0])trackMeta[1].name=parsed.names[0];
+  }else parsed.names.forEach((nm,i)=>{if(trackMeta[i])trackMeta[i].name=nm});
+  updateTrackPanel();
   const ps=notes.map(n=>n.p);
   viewY=(127-Math.max(...ps)-3)*rowH;
   drop.style.display='none';
