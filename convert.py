@@ -73,6 +73,14 @@ def extract_melody(midi_data, min_pitch: int = 0, group_ms: float = 80.0,
              if n.pitch >= min_pitch]
     notes.sort(key=lambda n: (n.start, -n.pitch))
 
+    if tie == "cut":
+        # 入力は仕上げ済みの単旋律とみなし、先に全ノートの尾を次の音の頭で
+        # クリップする。長い尾が原因の「タイ結合」も「鳴っている最中の
+        # 低音を伴奏として捨てる」誤爆も起きなくなる
+        for a, b in zip(notes, notes[1:]):
+            if a.end > b.start:
+                a.end = max(a.start + 0.02, b.start)
+
     group_s = group_ms / 1000.0
     kept = []
     for n in notes:
