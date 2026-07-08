@@ -65,10 +65,11 @@ def make_material(name, color, metallic=0.0, rough=0.4, transmission=0.0,
     return mat
 
 
-def make_marble(r, band_colors=None):
+def make_marble(r, band_colors=None, glow=1.1):
     """ガラスのビー玉: 外殻はガラス、内部に色の渦。
 
     band_colors: 渦の色4つ [(r,g,b,1)×4]。未指定なら既定の配色。
+    glow: 渦の発光強度(wall.jsonのmarble_glow)。
     """
     if band_colors is None:
         band_colors = [(0.95, 0.55, 0.10, 1), (0.15, 0.65, 0.35, 1),
@@ -107,7 +108,7 @@ def make_marble(r, band_colors=None):
         nt.links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
         nt.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
         nt.links.new(ramp.outputs["Color"], bsdf.inputs["Emission Color"])
-        bsdf.inputs["Emission Strength"].default_value = 1.1   # 渦が内側から光る
+        bsdf.inputs["Emission Strength"].default_value = glow   # 渦が内側から光る
         bsdf.inputs["Roughness"].default_value = 0.3
         core.data.materials.append(mat)
         core.parent = ball
@@ -115,6 +116,65 @@ def make_marble(r, band_colors=None):
 
 
 WALL_Y = 0.25   # 壁のBlender Y位置(奥行き)
+
+
+def add_picture_spot(center, energy=120):
+    """額縁を上前方から照らす美術館風スポット。壁に光のプールを作る。"""
+    tgt = bpy.data.objects.new("spot_target", None)
+    bpy.context.collection.objects.link(tgt)
+    tgt.location = center
+    bpy.ops.object.light_add(
+        type="SPOT", location=(center[0], center[1] - 1.6, center[2] + 1.3))
+    sp = bpy.context.object
+    sp.data.energy = energy
+    sp.data.spot_size = math.radians(55)
+    sp.data.spot_blend = 0.6                  # 縁を柔らかく
+    sp.data.color = (1.0, 0.93, 0.80)         # 温かいギャラリー光
+    sp.data.shadow_soft_size = 0.15
+    con = sp.constraints.new("TRACK_TO")
+    con.target = tgt
+
+
+def setup_stylize(scene, bloom=0.35, vignette=0.30):
+    """コンポジタ仕上げ: ブルーム(発光のにじみ)+ビネット(周辺減光)。
+
+    Blender 5.0の新コンポジタAPI(compositing_node_group)前提。
+    """
+    nt = bpy.data.node_groups.new("stylize", "CompositorNodeTree")
+    nt.interface.new_socket("Image", in_out="OUTPUT",
+                            socket_type="NodeSocketColor")
+    scene.compositing_node_group = nt
+    scene.render.use_compositing = True
+    rl = nt.nodes.new("CompositorNodeRLayers")
+    out = nt.nodes.new("NodeGroupOutput")
+    src = rl.outputs["Image"]
+    if bloom > 0:
+        glare = nt.nodes.new("CompositorNodeGlare")
+        glare.inputs["Type"].default_value = "Bloom"
+        glare.inputs["Threshold"].default_value = 1.0
+        glare.inputs["Strength"].default_value = bloom
+        glare.inputs["Size"].default_value = 0.6
+        nt.links.new(src, glare.inputs["Image"])
+        src = glare.outputs["Image"]
+    if vignette > 0:
+        mask = nt.nodes.new("CompositorNodeEllipseMask")
+        mask.inputs["Size"].default_value = (1.6, 1.6)
+        blur = nt.nodes.new("CompositorNodeBlur")
+        blur.inputs["Size"].default_value = (420, 420)
+        nt.links.new(mask.outputs["Mask"], blur.inputs["Image"])
+        mix = nt.nodes.new("ShaderNodeMix")
+        mix.data_type = "RGBA"
+        mix.blend_type = "MULTIPLY"
+        mix.inputs[0].default_value = vignette          # Factor
+        nt.links.new(src, mix.inputs[6])                # A: 画
+        nt.links.new(blur.outputs["Image"], mix.inputs[7])  # B: マスク
+        src = mix.outputs[2] if len(mix.outputs) > 2 else mix.outputs[0]
+        # RGBA出力ソケットを名前で選ぶ(インデックスはバージョン依存)
+        for o in mix.outputs:
+            if o.type == "RGBA":
+                src = o
+                break
+    nt.links.new(src, out.inputs["Image"])
 
 
 def add_wall_pin(parent, mat, at_local=(0.0, 0.0, 0.0)):
@@ -611,12 +671,12 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     # カメラに親子付けし、降下してもシーンの明るさが変わらないようにする
     bpy.ops.object.light_add(type="AREA", location=(-2.0, -4.5, 2.5))
     key = bpy.context.object
-    key.data.energy = 260
+    key.data.energy = 360
     key.data.size = 1.2
     key.rotation_euler = (math.radians(55), 0, math.radians(-30))
     bpy.ops.object.light_add(type="AREA", location=(2.5, -3.5, -1.0))
     fill = bpy.context.object
-    fill.data.energy = 55
+    fill.data.energy = 70
     fill.data.size = 4.0
     fill.rotation_euler = (math.radians(95), 0, math.radians(35))
 
@@ -662,17 +722,6 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
                        resolve_at(im["at"], im.get("dy", 0.0)),
                        im.get("width", 0.8), im.get("opacity", 0.85),
                        im.get("desaturate", 0.35))
-    plaque_mat = make_material("plaque", (0.55, 0.45, 0.25, 1),
-                               metallic=1.0, rough=0.35)
-    for fr in wall_cfg.get("frames", []):
-        frame_mat = make_material("frame", (0.06, 0.06, 0.07, 1),
-                                  metallic=0.85, rough=0.35)
-        plate_text_mat = make_material("plaquetext", (0.16, 0.13, 0.08, 1),
-                                       rough=0.6)
-        add_framed_picture(wall_file(fr["file"]),
-                           resolve_at(fr["at"], fr.get("dy", 0.0)),
-                           fr.get("width", 0.9), fr.get("title", ""),
-                           font, plaque_mat, frame_mat, plate_text_mat)
     # 入口・出口の暗いトンネル(ループの継ぎ目を隠す)
     for tn in sc.get("tunnels", []):
         add_tunnel(tn["a"], tn["b"], tn["u"], sc["ball_r"])
@@ -683,11 +732,14 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
                                   metallic=0.85, rough=0.35)
         plate_text_mat = make_material("plaquetext", (0.16, 0.13, 0.08, 1),
                                        rough=0.6)
+        spot_energy = float(wall_cfg.get("frame_spot_energy", 120))
         for fr in wall_cfg["frames"]:
-            add_framed_picture(wall_file(fr["file"]),
-                               resolve_at(fr["at"], fr.get("dy", 0.0)),
+            pos = resolve_at(fr["at"], fr.get("dy", 0.0))
+            add_framed_picture(wall_file(fr["file"]), pos,
                                fr.get("width", 0.9), fr.get("title", ""),
                                font, plaque_mat, frame_mat, plate_text_mat)
+            if spot_energy > 0:
+                add_picture_spot(pos, energy=spot_energy)
     faint_mat = make_material("wallnote", (0.47, 0.50, 0.56, 1), rough=0.85)
     glyphs = ["\u266a", "\u266b", "\u2669"]
     ys2 = [b[1] for b in sc["ball"]]
@@ -740,7 +792,8 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
             band.append((*colorsys.hsv_to_rgb(h, sv, v), 1.0))
     else:
         band = None
-    ball = make_marble(sc["ball_r"], band)
+    ball = make_marble(sc["ball_r"], band,
+                       glow=float(wall_cfg.get("marble_glow", 1.1)))
     spin = sc.get("spin", [0.0] * len(sc["ball"]))
     for f, p in enumerate(sc["ball"]):
         ball.location = to_b(p)
@@ -838,6 +891,11 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
         target.location = to_b(cs["look"])
         cam.keyframe_insert("location", frame=f)
         target.keyframe_insert("location", frame=f)
+
+    # ---- 仕上げ(コンポジタ): ブルーム+ビネット ----
+    setup_stylize(scene,
+                  bloom=float(wall_cfg.get("bloom", 0.35)),
+                  vignette=float(wall_cfg.get("vignette", 0.30)))
 
     return {"ball": ball, "cam": cam, "n_frames": n_frames}
 

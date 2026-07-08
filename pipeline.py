@@ -71,6 +71,16 @@ def list_tracks(midi: Path):
     return rows
 
 
+def tone_args(args):
+    """convert.pyへ渡す音色関連の引数(未指定オプションは省いてtoneに任せる)。"""
+    ta = ["--tone", args.tone]
+    if args.instrument:
+        ta += ["-i", args.instrument]
+    if args.reverb is not None:
+        ta += ["--reverb", args.reverb]
+    return ta
+
+
 def cmd_audio(args):
     midi, indir, outdir = resolve_project(args.project)
     args.midi = midi
@@ -90,8 +100,8 @@ def cmd_audio(args):
                  "--min-velocity", args.min_velocity,
                  "--long-note", args.long_note,
                  "--long-note-len", args.long_note_len,
-                 "-i", args.instrument, "--octave", args.octave,
-                 "--reverb", args.reverb, "--sf2", SF2, "-o", out]],
+                 *tone_args(args), "--octave", args.octave,
+                 "--sf2", SF2, "-o", out]],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if r.returncode == 0:
                 print(f"  track{i}: {name:22s} {n:4d}音 音域{lo}-{hi} → {out}")
@@ -111,11 +121,14 @@ def cmd_audio(args):
          "--min-velocity", args.min_velocity,
          "--long-note", args.long_note,
          "--long-note-len", args.long_note_len,
-         "-i", args.instrument, "--octave", args.octave,
-         "--reverb", args.reverb, "--sf2", SF2,
+         *(["--max-len", args.max_len] if args.max_len else []),
+         *tone_args(args), "--octave", args.octave,
+         "--sf2", SF2,
          "--save-midi", "-o", audio])
     (outdir / "config.json").write_text(json.dumps({
         "track": args.track,
+        "max_len": args.max_len,
+        "tone": args.tone,
         "instrument": args.instrument,
         "octave": args.octave,
         "reverb": args.reverb,
@@ -139,8 +152,9 @@ def mv_args(midi: Path, cfg: dict, args):
           "--track", cfg["track"],
           "--long-note", cfg.get("long_note", "keep"),
           "--long-note-len", cfg.get("long_note_len", 0.5)]
-    if args.duration:
-        mv += ["--duration", args.duration]
+    duration = args.duration or cfg.get("max_len")
+    if duration:
+        mv += ["--duration", duration]
     return mv
 
 
@@ -166,6 +180,11 @@ def cmd_final(args):
     if (indir / "wall.json").exists():
         br += ["--wall", indir / "wall.json"]
     run(br)
+    if args.postfx != "none":
+        fx_frames = outdir / "frames_fx"
+        run([sys.executable, ROOT / "postfx_lab.py", frames,
+             "-o", fx_frames, "--apply", args.postfx])
+        frames = fx_frames
     meta = json.loads(scene.read_text())
     delay = meta["audio_delay_ms"]
     dur = meta["duration_s"]
@@ -188,11 +207,18 @@ def main():
     p.add_argument("--track", type=str, default=None,
                    help="メロディのトラック番号。カンマ区切りで複数合成可 (例: 0,2,5)。"
                         "省略時: 全トラックを聴き比べ用に出力")
-    p.add_argument("--instrument", default="celesta",
-                   help="音色: celesta/music_box/kalimba/harp/vibraphone/marimba等")
+    p.add_argument("--max-len", type=float, default=None,
+                   help="曲を先頭N秒に切り詰める(preview/finalにも自動反映)")
+    p.add_argument("--tone", default="celesta_hall",
+                   choices=["celesta_hall", "musicbox_hall", "kalimba_hall"],
+                   help="音色プリセット(楽器+質感+残響のセット。"
+                        "デフォルト: celesta_hall)")
+    p.add_argument("--instrument", default=None,
+                   help="楽器を個別指定してtoneの楽器を上書き"
+                        "(celesta/music_box/kalimba/harp等)")
     p.add_argument("--octave", type=int, default=0, help="オクターブシフト")
-    p.add_argument("--reverb", type=float, default=0.6,
-                   help="リバーブ(残響)の量 0-1、0で無効")
+    p.add_argument("--reverb", type=float, default=None,
+                   help="リバーブ(部屋サイズ) 0-1、0で無効。省略時はtoneに任せる")
     p.add_argument("--min-pitch", type=int, default=55,
                    help="これ未満の低音を捨てる(MIDIノート番号)")
     p.add_argument("--min-velocity", type=int, default=48,
@@ -216,6 +242,9 @@ def main():
             p.add_argument("--engine", choices=["eevee", "cycles"],
                            default="eevee")
             p.add_argument("--samples", type=int, default=48)
+            p.add_argument("--postfx", default="E_refined",
+                           help="ポスト処理プリセット(postfx_lab.py参照、"
+                                "noneでスキップ)")
         p.set_defaults(fn=fn)
 
     args = ap.parse_args()

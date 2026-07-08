@@ -36,6 +36,21 @@ DEFAULT_OCTAVE = {
     "celesta": 1,
 }
 
+# 音色プリセット: 楽器+高域の丸め+ホールリバーブのwet/dampingをセットで指定。
+# 参照音源(ホール残響のオルゴール)の分析から出発し、聴感で「上品な余韻」
+# レベルまで控えめに追い込んだ確定値。
+# musicbox_hallのローパス4.2kHzはFluidR3の金属的なシャリつき除去。
+TONES = {
+    "celesta_hall":  dict(instrument="celesta",   lowpass=9500,
+                          wet=0.32, damping=0.45),
+    "musicbox_hall": dict(instrument="music_box", lowpass=4200,
+                          wet=0.32, damping=0.45),
+    "kalimba_hall":  dict(instrument="kalimba",   lowpass=6000,
+                          wet=0.32, damping=0.45),
+}
+DEFAULT_TONE = "celesta_hall"
+DEFAULT_ROOM = 0.82          # リバーブの部屋サイズ(上品な余韻)
+
 DEFAULT_SF2 = "/usr/share/sounds/sf2/TimGM6mb.sf2"
 SAMPLE_RATE = 44100
 
@@ -161,7 +176,8 @@ def restyle(midi_data, program: int, octave_shift: int, min_velocity: int):
 
 
 def render(midi_data, sf2_path: Path, out_mp3: Path, gain_db: float,
-           reverb: float = 0.0):
+           reverb: float = 0.0, lowpass: float = 9500,
+           wet: float = 0.45, damping: float = 0.25):
     """FluidSynthでWAVにレンダリングし、ffmpegでMP3化する。"""
     import numpy as np
     import soundfile as sf
@@ -173,9 +189,9 @@ def render(midi_data, sf2_path: Path, out_mp3: Path, gain_db: float,
     if reverb > 0:
         from pedalboard import Pedalboard, Reverb, LowpassFilter
         board = Pedalboard([
-            LowpassFilter(cutoff_frequency_hz=9500),   # 高域を少し丸める
-            Reverb(room_size=reverb, damping=0.5,
-                   wet_level=0.28, dry_level=0.75, width=1.0),
+            LowpassFilter(cutoff_frequency_hz=lowpass),   # 高域を丸める
+            Reverb(room_size=reverb, damping=damping,
+                   wet_level=wet, dry_level=0.65, width=1.0),
         ])
         if audio.ndim == 1:
             audio = np.stack([audio, audio])           # ステレオ化(広がり)
@@ -203,8 +219,12 @@ def main():
     parser.add_argument("input", type=Path, help="入力MIDI (.mid)")
     parser.add_argument("-o", "--output", type=Path,
                         help="出力MP3パス (省略時: <入力名>_<音色>.mp3)")
+    parser.add_argument("--tone", choices=TONES, default=DEFAULT_TONE,
+                        help=f"音色プリセット(楽器+質感+残響のセット。"
+                             f"デフォルト: {DEFAULT_TONE})")
     parser.add_argument("-i", "--instrument", choices=INSTRUMENTS,
-                        default="music_box", help="音色 (デフォルト: music_box)")
+                        default=None,
+                        help="楽器を個別指定(toneの楽器を上書き)")
     parser.add_argument("--octave", type=int, default=None,
                         help="オクターブシフト (デフォルトは音色ごとの推奨値)")
     parser.add_argument("--sf2", type=Path, default=Path(DEFAULT_SF2),
@@ -223,10 +243,14 @@ def main():
                              "split=トレモロ風に刻む (デフォルト: keep)")
     parser.add_argument("--long-note-len", type=float, default=0.5,
                         help="長音とみなす秒数(cutの上限、splitの刻み間隔。デフォルト: 0.5)")
+    parser.add_argument("--max-len", type=float, default=0,
+                        help="曲を先頭N秒に切り詰める(無音カット後の時刻基準。"
+                             "make_video --durationと同じ境界。0で無効)")
     parser.add_argument("--gain", type=float, default=0.0,
                         help="出力ゲイン調整dB (デフォルト: 0)")
-    parser.add_argument("--reverb", type=float, default=0.6,
-                        help="リバーブの部屋サイズ 0-1 (0で無効, デフォルト: 0.6)")
+    parser.add_argument("--reverb", type=float, default=DEFAULT_ROOM,
+                        help="リバーブの部屋サイズ 0-1 "
+                             f"(0で無効, デフォルト: {DEFAULT_ROOM})")
     parser.add_argument("--save-midi", action="store_true",
                         help="中間MIDIファイルも保存する")
     args = parser.parse_args()
@@ -236,10 +260,12 @@ def main():
     if not args.sf2.exists():
         sys.exit(f"エラー: サウンドフォントが見つかりません: {args.sf2}")
 
+    tone = TONES[args.tone]
+    instrument = args.instrument or tone["instrument"]
     output = args.output or args.input.with_name(
-        f"{args.input.stem}_{args.instrument}.mp3")
+        f"{args.input.stem}_{instrument}.mp3")
     octave = args.octave if args.octave is not None \
-        else DEFAULT_OCTAVE.get(args.instrument, 0)
+        else DEFAULT_OCTAVE.get(instrument, 0)
 
     if args.input.suffix.lower() not in (".mid", ".midi"):
         sys.exit("エラー: 入力はMIDIファイル(.mid)にしてください")
@@ -255,7 +281,11 @@ def main():
     midi_data = process_long_notes(midi_data, args.long_note,
                                    args.long_note_len)
     midi_data = trim_leading_silence(midi_data)
-    midi_data = restyle(midi_data, INSTRUMENTS[args.instrument],
+    if args.max_len > 0:
+        # make_video --duration と同じ境界(start <= N)。音の尾は自然に残す
+        for inst in midi_data.instruments:
+            inst.notes = [n for n in inst.notes if n.start <= args.max_len]
+    midi_data = restyle(midi_data, INSTRUMENTS[instrument],
                         octave, args.min_velocity)
 
     if args.save_midi:
@@ -263,7 +293,8 @@ def main():
         midi_data.write(str(midi_path))
         print(f"      MIDI保存: {midi_path}")
 
-    render(midi_data, args.sf2, output, args.gain, args.reverb)
+    render(midi_data, args.sf2, output, args.gain, args.reverb,
+           lowpass=tone["lowpass"], wet=tone["wet"], damping=tone["damping"])
     print(f"完了: {output}")
 
 
