@@ -48,6 +48,8 @@
     <button id="rw" title="先頭へ">⏮</button>
     <button id="play">▶ 再生</button>
     <button id="melodyOnly" class="toggle" title="メロディだけ聴く">🎼 メロディのみ</button>
+    <button id="tapBtn" class="toggle"
+      title="伴奏を再生しながら任意のキーを叩くと、メロディの開始位置が叩いた順に打ち直される">🥁 タップ修正</button>
   </span>
   <span class="grp" title="編集">
     <button id="selAll" title="全選択 (Ctrl+A)">全選択</button>
@@ -81,6 +83,13 @@
       <tr><td>中/右ボタンドラッグ</td><td>画面を自由に移動(パン)</td></tr>
       <tr><td>ホイール</td><td>縦スクロール / <kbd>Shift</kbd>+で横 / <kbd>Ctrl</kbd>+でズーム</td></tr>
       <tr><td>空白クリック</td><td>再生開始位置(赤線)をセット</td></tr>
+    </table>
+    <h3>タップ修正 🥁</h3>
+    <table>
+      <tr><td>開始</td><td>🥁ボタン。伴奏だけ再生され、メロディは消音</td></tr>
+      <tr><td>任意のキー</td><td>叩いた瞬間に次のメロディノート(赤枠)の開始位置が打ち直される</td></tr>
+      <tr><td><kbd>Space</kbd> / <kbd>Esc</kbd></td><td>途中終了(残りは元のまま)。<kbd>Ctrl+Z</kbd>で全部戻せる</td></tr>
+      <tr><td>途中から</td><td>空白クリックで赤線を置いてから🥁 → それ以降だけ修正</td></tr>
     </table>
     <h3>キーボード</h3>
     <table>
@@ -222,6 +231,11 @@ function draw(){
   }
   if(rubber){g.strokeStyle='#ffffff88';g.setLineDash([4,3]);
     g.strokeRect(rubber.x0,rubber.y0,rubber.x1-rubber.x0,rubber.y1-rubber.y0);g.setLineDash([])}
+  if(tap&&tap.idx<tap.queue.length){       // 次にタップで打ち直されるノート
+    const n=tap.queue[tap.idx];
+    g.strokeStyle='#e05a4e';g.lineWidth=2.5;
+    g.strokeRect(s2x(n.t)-1,p2y(n.p)-1,Math.max(3,n.d*pxPerSec)+2,rowH+2);
+  }
   const px=s2x(playing?playOffset+(ctx.currentTime-playT0):cursor);
   g.fillStyle='#e05a4e';g.fillRect(px,0,1.5,H);
   document.getElementById('stat').textContent=
@@ -306,6 +320,11 @@ cv.addEventListener('pointermove',e=>{
 cv.addEventListener('pointerup',()=>{pan=null});
 addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT'&&e.target.type==='file')return;
+  if(tap){                                  // タップ修正中: 何のキーでもタップ
+    if(e.code==='Space'||e.key==='Escape'){e.preventDefault();endTap();return}
+    if(e.ctrlKey||e.metaKey||e.repeat)return;
+    e.preventDefault();doTap();return;
+  }
   if(e.code==='Space'){e.preventDefault();togglePlay()}
   else if(e.key==='Delete'||e.key==='Backspace'){delSel()}
   else if(e.key==='m'||e.key==='M'){assign(0)}
@@ -388,12 +407,48 @@ function togglePlay(){
   document.getElementById('play').textContent='⏹ 停止';
   for(const n of notes){
     if(melodyOnly&&n.track!==0)continue;
-    if(n.t>=playOffset-0.001) toneAt(n, playT0+(n.t-playOffset)-0+0.05);
+    if(tap&&n.track===0)continue;          // タップ修正中はメロディを消音
+    if(n.t>=playOffset-0.001) toneAt(n, playT0+(n.t-playOffset));
   }
   animate();
 }
+// ---------- タップ修正モード ----------
+// 伴奏を聴きながら任意のキーを叩くと、メロディノートの開始時刻が
+// 叩いたタイミングで1音ずつ(時刻順に)打ち直される。音程・長さは不変。
+let tap=null;   // {queue:[対象ノート], idx}
+function startTap(){
+  if(tap){endTap();return}
+  const targets=notes.filter(n=>n.track===0&&n.t>=cursor-1e-9)
+                     .sort((a,b)=>a.t-b.t);
+  if(!targets.length){alert('カーソル以降にメロディ(金色)がありません');return}
+  snapshot();
+  if(playing)stopPlay();
+  tap={queue:targets,idx:0};
+  document.getElementById('tapBtn').classList.add('active');
+  togglePlay();
+}
+function doTap(){
+  if(!tap||!playing)return;
+  const t=playOffset+(ctx.currentTime-playT0);
+  if(tap.idx<tap.queue.length){
+    const n=tap.queue[tap.idx++];
+    n.t=Math.max(0,t);
+    toneAt(n,ctx.currentTime+0.001);       // 叩いた音をその場で鳴らす
+    draw();
+  }
+  if(tap.idx>=tap.queue.length)endTap();
+}
+function endTap(){
+  if(!tap)return;
+  tap=null;
+  document.getElementById('tapBtn').classList.remove('active');
+  if(playing)stopPlay();
+  draw();
+}
+document.getElementById('tapBtn').onclick=startTap;
 function stopPlay(){
   playing=false;if(ctx){ctx.close();ctx=null}
+  if(tap){tap=null;document.getElementById('tapBtn').classList.remove('active')}
   document.getElementById('play').textContent='▶ 再生';
   draw();
 }
