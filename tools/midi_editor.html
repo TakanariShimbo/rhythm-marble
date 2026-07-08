@@ -16,6 +16,10 @@
   button:hover,label.btn:hover{background:#3a404b}
   button.primary{background:var(--melody);color:#1b1e23;border-color:transparent;font-weight:600}
   #bar .sp{flex:1}
+  #bar .div{width:1px;height:1.4rem;background:var(--rule);margin:0 .25rem}
+  #bar .chk{font-size:.8rem;display:flex;align-items:center;gap:.3em}
+  #bar input[type=number]{width:4.2em;background:#31363f;color:var(--ink);
+    border:1px solid var(--rule);border-radius:4px;padding:.28rem .3rem;font-size:.82rem}
   #hint{font-size:.75rem;color:var(--sub);padding:.35rem .8rem;background:var(--panel);
     border-bottom:1px solid var(--rule)}
   #wrap{position:relative;height:calc(100% - 86px)}
@@ -29,26 +33,29 @@
 </style>
 <div id="bar">
   <b>🔮 MIDI Editor</b>
-  <label class="btn">📂 開く<input type="file" id="file" accept=".mid,.midi"></label>
+  <span class="div"></span>
   <button id="play">▶ 再生 <kbd>Space</kbd></button>
-  <label style="font-size:.8rem"><input type="checkbox" id="melodyOnly"> メロディのみ再生</label>
-  <button id="toMel" title="M">選択→メロディ</button>
-  <button id="toAcc" title="A">選択→伴奏</button>
+  <label class="chk"><input type="checkbox" id="melodyOnly"> メロディのみ</label>
+  <span class="div"></span>
   <button id="selAll" title="Ctrl+A">全選択</button>
+  <button id="toMel" title="M">→メロディ</button>
+  <button id="toAcc" title="A">→伴奏</button>
   <button id="squash" title="L">⇤ 長さ統一</button>
   <input type="number" id="squashLen" value="0.30" min="0.05" max="2" step="0.05"
-    style="width:4.2em;background:#31363f;color:var(--ink);border:1px solid var(--rule);
-    border-radius:4px;padding:.28rem .3rem;font-size:.82rem" title="統一する長さ(秒)">
+    title="統一する長さ(秒)">
   <button id="del">削除 <kbd>Del</kbd></button>
-  <button id="undo">↩ 戻す</button>
+  <span class="div"></span>
+  <button id="undo" title="Ctrl+Z">↩ 戻す</button>
+  <button id="redo" title="Ctrl+Y">↪ 進む</button>
   <span class="sp"></span>
-  <span class="stat" id="stat"></span>
-  <button class="primary" id="save">💾 .mid 書き出し</button>
+  <label class="btn">📂 開く<input type="file" id="file" accept=".mid,.midi"></label>
+  <button class="primary" id="save">💾 書き出し</button>
 </div>
 <div id="hint">
+  <span class="stat" id="stat" style="float:right"></span>
   ドラッグ=範囲選択 / ノートをドラッグ=移動 / 右端ドラッグ=長さ / ダブルクリック=追加(メロディ) /
   <kbd>M</kbd> メロディ化 <kbd>A</kbd> 伴奏化 <kbd>L</kbd> 長さ統一(左詰め) <kbd>Del</kbd> 削除 <kbd>←→↑↓</kbd> 微調整
-  <kbd>Ctrl+Z</kbd> 取り消し / ホイール=縦 <kbd>Shift</kbd>+ホイール=横 <kbd>Ctrl</kbd>+ホイール=ズーム
+  <kbd>Ctrl+Z</kbd> 戻す <kbd>Ctrl+Y</kbd> 進む / ホイール=縦 <kbd>Shift</kbd>+ホイール=横 <kbd>Ctrl</kbd>+ホイール=ズーム
   中/右ボタンドラッグ=自由パン / 書き出しは track0=メロディ, track1=伴奏
 </div>
 <div id="wrap"><canvas id="cv"></canvas><div id="drop">.mid をここにドラッグ&ドロップ</div></div>
@@ -63,8 +70,13 @@ let undoStack = [];
 const cv = document.getElementById('cv'), g = cv.getContext('2d');
 const wrap = document.getElementById('wrap'), drop = document.getElementById('drop');
 
-function snapshot(){ undoStack.push(JSON.stringify(notes)); if(undoStack.length>100) undoStack.shift(); }
-function undo(){ const s = undoStack.pop(); if(s){ notes = JSON.parse(s); sel.clear(); draw(); } }
+let redoStack = [];
+function snapshot(){ undoStack.push(JSON.stringify(notes)); redoStack.length=0;
+  if(undoStack.length>100) undoStack.shift(); }
+function undo(){ const s = undoStack.pop();
+  if(s){ redoStack.push(JSON.stringify(notes)); notes = JSON.parse(s); sel.clear(); draw(); } }
+function redo(){ const s = redoStack.pop();
+  if(s){ undoStack.push(JSON.stringify(notes)); notes = JSON.parse(s); sel.clear(); draw(); } }
 
 // ---------- MIDI parse ----------
 function parseMidi(buf){
@@ -259,6 +271,7 @@ addEventListener('keydown',e=>{
   else if(e.key==='m'||e.key==='M'){assign(0)}
   else if(e.key==='a'&&!e.ctrlKey||e.key==='A'&&!e.ctrlKey){assign(1)}
   else if(e.key==='l'||e.key==='L'){squash()}
+  else if(e.ctrlKey&&(e.key==='y'||e.key==='Y'||(e.shiftKey&&(e.key==='z'||e.key==='Z')))){e.preventDefault();redo()}
   else if(e.ctrlKey&&e.key==='z'){e.preventDefault();undo()}
   else if(e.ctrlKey&&(e.key==='a'||e.key==='A')){e.preventDefault();selectAll()}
   else if(e.key.startsWith('Arrow')&&sel.size){
@@ -288,6 +301,7 @@ document.getElementById('toMel').onclick=()=>assign(0);
 document.getElementById('toAcc').onclick=()=>assign(1);
 document.getElementById('del').onclick=delSel;
 document.getElementById('undo').onclick=undo;
+document.getElementById('redo').onclick=redo;
 // ---------- playback ----------
 // フェーズ1デフォルト(celesta_hall)を再現: celesta風の音色(基音+4倍音)に
 // ホールリバーブ(wet 0.32 / damping 0.45 相当のIR)をかける
