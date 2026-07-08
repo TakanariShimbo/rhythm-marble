@@ -38,7 +38,7 @@ cp どこかの曲.mid data/my-song/input/song.mid
 
 ```bash
 # サンプルをそのまま動かす
-uv run python pipeline.py audio   data/twinkle-star --track 0 --instrument music_box
+uv run python pipeline.py audio   data/twinkle-star --track 0
 uv run python pipeline.py preview data/twinkle-star
 uv run python pipeline.py final   data/twinkle-star
 ```
@@ -59,13 +59,20 @@ uv run python pipeline.py audio data/my-song --track 4 --play
 
 | オプション | 既定 | 意味 |
 |---|---|---|
-| `--instrument` | celesta | celesta / music_box / kalimba / harp / vibraphone / marimba / glockenspiel / xylophone |
-| `--octave` | 0 | オクターブシフト |
-| `--reverb` | 0.6 | 残響量 0-1(0で無効)。心地よさの要 |
+| `--tone` | celesta_hall | 音色プリセット(楽器+高域の丸め+残響のセット): celesta_hall / musicbox_hall / kalimba_hall |
+| `--instrument` | (toneに従う) | 楽器を個別指定してtoneの楽器だけ上書き: celesta / music_box / kalimba / harp / vibraphone / marimba / glockenspiel / xylophone |
+| `--octave` | 0 | オクターブシフト。メロディの中央値がC5前後になると映える |
+| `--reverb` | (toneに従う=0.82) | 残響の部屋サイズ 0-1(0で無効)。心地よさの要 |
+| `--max-len` | なし | 曲を先頭N秒に切り詰める(preview/finalにも自動反映) |
 | `--min-pitch` | 55 | これ未満の低音を捨てる(伴奏・ベース除去) |
 | `--min-velocity` | 48 | 弱いノートの底上げ |
 | `--long-note` | keep | 長い音の扱い: keep=そのまま / cut=切り詰め / split=トレモロ風に刻む(動画のバウンドも増える) |
 | `--long-note-len` | 0.5 | 長音の閾値秒数(cutの上限、splitの刻み間隔) |
+
+音色プリセットは「オルゴール調の澄んだ単音+上品なホール余韻」を
+実音源の分析から追い込んだ確定値(wet 0.32 / damping 0.45 / room 0.82)。
+まず既定の celesta_hall で聴き、キャラクターを変えたいときだけ
+musicbox_hall(よりオルゴール的) / kalimba_hall(より丸く素朴)を試すとよい。
 
 自動で行われる整形: タイ(前の音に食い込んで続く同音ノート)の結合、
 曲頭の無音カット。どちらも音源と動画で同じ処理を通るため同期は保たれる。
@@ -91,8 +98,22 @@ uv run python pipeline.py final data/my-song
 uv run python pipeline.py final data/my-song --engine cycles  # 最高品質(数時間)
 ```
 
-Blender(Eevee)でレンダリングして `output/final.mp4` を出力。
+Blender(Eevee)でレンダリングした後、映像ポスト処理(カラーグレーディング+
+コントラスト+情報量スポット+弱ブルーム+ビネット+シャープ)を全フレームに
+並列適用してから `output/final.mp4` にエンコードする。
 `--duration 10` で冒頭だけ試すこともできる。
+
+- ポスト処理のプリセットは `--postfx` で変更(`none` でスキップ)。
+  中身とパラメータは `postfx_lab.py` の `PRESETS` を参照
+- 加工前フレームは `output/frames/`、加工後は `output/frames_fx/` に残るので、
+  音声だけ差し替えたいときは ffmpeg の再多重化だけで済む(再レンダリング不要)
+
+ポスト処理の調整は試作モードが便利(代表フレームを自動選定して
+プリセット比較シートを作る):
+
+```bash
+uv run python postfx_lab.py data/my-song/output/frames -o /tmp/fxlab
+```
 
 ## wall.json — 壁の演出(額・タイトル)
 
@@ -108,17 +129,25 @@ Blender(Eevee)でレンダリングして `output/final.mp4` を出力。
     {"file": "starry_sky.jpg", "at": "start", "dy": 0.95, "width": 0.95}
   ],
   "lights": ["#fff3cc", "#8fa8e0"],
-  "marble_colors": ["#1c3a73", "#ffd98c", "#e8f0ff", "#0e1f4d"]
+  "marble_colors": ["#1c3a73", "#ffd98c", "#e8f0ff", "#0e1f4d"],
+  "lights_energy": 110,
+  "marble_glow": 1.8
 }
 ```
 
 - `frames` = 額に入れて壁に飾る画像。**どんな画像でもそのまま使える**
-  (切り抜き不要)。`title`を付けると額の下に真鍮の銘板が付く
-- `texts` = 壁に直接刻印されるメタリックブラックの文字(`\n`で複数行可)
+  (切り抜き不要)。`title`を付けると額の下に真鍮の銘板が付く。
+  各額には美術館風のスポットライトが自動で当たる
+- `texts` = 壁に直接刻印されるメタリックブラックの文字(`\n`で複数行可)。
+  サムネイルで読ませたい銘板は `size: 0.24` 程度が目安
 - `at`: `"start"`(ビー玉が出てくる壁の位置) / `"end"` / `"first_plate"` / `[x, y]`座標
 - `dy`: 上下オフセット(m) / `size`: 文字の高さ(m) / `width`: 額の画像幅(m)
 - `lights`: 経路沿いの照明色(HEX、交互に配置) / `marble_colors`: ビー玉の渦の色4つ
   (未指定ならライト色から自動導出)
+- 明るさ・演出の微調整キー(いずれも任意):
+  `lights_energy`(経路照明の強さ、既定55) / `marble_glow`(ビー玉の発光、既定1.1) /
+  `frame_spot_energy`(額のスポット、既定120、0で無効) /
+  `bloom`(既定0.35) / `vignette`(既定0.30)
 
 構図の目安: 額(`dy +1.0`)/ 壁割れハッチ(start)/ タイトル(`dy -0.72`)で
 0秒フレームがサムネイルとして成立する。
@@ -146,6 +175,7 @@ input/song.mid
   │                     ├ preview: 簡易3Dレンダラー(PIL) → preview.mp4
   │                     └ final:   scene.json 書き出し
   │ blender_render.py Blender(bpy+Eevee/Cycles)フォトリアル描画 → frames/
+  │ postfx_lab.py     映像ポスト処理(E_refined) → frames_fx/
   └ ffmpeg            音声と合成 → final.mp4
 
 pipeline.py が上記を audio / preview / final の3コマンドに束ねる
@@ -172,6 +202,7 @@ pipeline.py          3フェーズの入口
 convert.py           MIDI→音源(フェーズ1の中身)
 make_video.py        物理+配置+検証+簡易レンダラー(フェーズ2の中身)
 blender_render.py    フォトリアル描画(フェーズ3の中身)
+postfx_lab.py        映像ポスト処理: 試作(比較シート)と全フレーム適用
 setup.sh             vendor/ と .venv の再構築
 data/<プロジェクト>/  input/(ユーザー) と output/(生成物)
 data/twinkle-star/   サンプルプロジェクト(inputのみgit管理)
