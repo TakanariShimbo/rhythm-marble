@@ -41,8 +41,9 @@ DEFAULT_OCTAVE = {
 # レベルまで控えめに追い込んだ確定値。
 # musicbox_hallのローパス4.2kHzはFluidR3の金属的なシャリつき除去。
 TONES = {
-    "celesta_hall":  dict(instrument="celesta",   lowpass=9500,
-                          wet=0.32, damping=0.45),
+    "celesta_hall":  dict(instrument="celesta",   lowpass=5500,
+                          lowpass_stages=3, attack_ms=15, attack_ms_low=45,
+                          highpass=200, wet=0.32, damping=0.7),
     "musicbox_hall": dict(instrument="music_box", lowpass=4200,
                           wet=0.32, damping=0.45),
     "kalimba_hall":  dict(instrument="kalimba",   lowpass=6000,
@@ -192,7 +193,9 @@ def restyle(midi_data, program: int, octave_shift: int, min_velocity: int):
 
 def render(midi_data, sf2_path: Path, out_mp3: Path, gain_db: float,
            reverb: float = 0.0, lowpass: float = 9500,
-           wet: float = 0.45, damping: float = 0.25):
+           wet: float = 0.45, damping: float = 0.25,
+           lowpass_stages: int = 1, attack_ms: float = 0.0,
+           attack_ms_low: float = None, highpass: float = None):
     """FluidSynthでWAVにレンダリングし、ffmpegでMP3化する。"""
     import numpy as np
     import soundfile as sf
@@ -200,14 +203,34 @@ def render(midi_data, sf2_path: Path, out_mp3: Path, gain_db: float,
     print(f"[2/3] レンダリング中 (soundfont: {sf2_path.name})")
     audio = midi_data.fluidsynth(fs=SAMPLE_RATE, sf2_path=str(sf2_path))
 
+    # アタック軟化: 各ノートの頭に短いフェードインをかけ、
+    # ビー玉が金属に当たったような硬い打撃音を削る(残響・音色は無傷)。
+    # 低音の打撃は「ゴツッ」と重く響くので、attack_ms_low指定時は
+    # 音程に応じてフェードを延ばす(pitch55でlow、84でattack_msに線形補間)
+    if attack_ms > 0:
+        lo = attack_ms_low if attack_ms_low else attack_ms
+        for inst in midi_data.instruments:
+            for note in inst.notes:
+                t = min(max((note.pitch - 55) / (84 - 55), 0.0), 1.0)
+                fms = lo + (attack_ms - lo) * t
+                n_fade = int(SAMPLE_RATE * fms / 1000)
+                i = int(note.start * SAMPLE_RATE)
+                if 0 <= i and i + n_fade < len(audio):
+                    audio[i:i + n_fade] *= np.linspace(0.0, 1.0, n_fade)
+
     # リバーブ等の空間系エフェクト(心地よい残響)
     if reverb > 0:
-        from pedalboard import Pedalboard, Reverb, LowpassFilter
-        board = Pedalboard([
-            LowpassFilter(cutoff_frequency_hz=lowpass),   # 高域を丸める
-            Reverb(room_size=reverb, damping=damping,
-                   wet_level=wet, dry_level=0.65, width=1.0),
-        ])
+        from pedalboard import (Pedalboard, Reverb, LowpassFilter,
+                                HighpassFilter)
+        # LowpassFilterは6dB/octと緩いので、多段重ねで傾斜を稼ぐ。
+        # highpassは低音打撃の「ゴツッ」というこもった芯を除去
+        chain = ([HighpassFilter(cutoff_frequency_hz=highpass)]
+                 if highpass else [])
+        chain += [LowpassFilter(cutoff_frequency_hz=lowpass)
+                  for _ in range(max(1, lowpass_stages))]
+        chain.append(Reverb(room_size=reverb, damping=damping,
+                            wet_level=wet, dry_level=0.65, width=1.0))
+        board = Pedalboard(chain)
         if audio.ndim == 1:
             audio = np.stack([audio, audio])           # ステレオ化(広がり)
         audio = board(audio.astype(np.float32), SAMPLE_RATE).T
@@ -331,7 +354,11 @@ def main():
         print(f"      MIDI保存: {midi_path}")
 
     render(midi_data, args.sf2, output, args.gain, args.reverb,
-           lowpass=tone["lowpass"], wet=tone["wet"], damping=tone["damping"])
+           lowpass=tone["lowpass"], wet=tone["wet"], damping=tone["damping"],
+           lowpass_stages=tone.get("lowpass_stages", 1),
+           attack_ms=tone.get("attack_ms", 0.0),
+           attack_ms_low=tone.get("attack_ms_low"),
+           highpass=tone.get("highpass"))
     print(f"完了: {output}")
 
 
