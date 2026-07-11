@@ -354,6 +354,19 @@ def build_path(bounces):
                   (np.abs(q[:, :, 1] - box_cy[:, None]) < PLAT_H / 2 + BALL_R * 0.9))
         score += (in_box & early[None, :]).any(axis=1) * 523  # (6)
 
+        # (7) 次のノート間隔が極端に短い場合の先読み速度条件:
+        # 間隔dtの間に板同士が重ならないだけの距離を稼ぐには、着地時点で
+        # おおよそ (板幅+余白)/dt 以上の速さが必要。バウンドでは速度を
+        # 増やせないので、1つ手前で「速く送り込む」候補だけを許す
+        if i < N - 2:
+            dt_after = bounces[i + 2][0] - bounces[i + 1][0]
+            if dt_after < 0.12:
+                # 必要分離距離を間隔で割り、短い飛行中の重力加速分を差し引く
+                need = (w_next / 2 + PLAT_H + 0.08) / dt_after \
+                    - 0.5 * G * dt_after
+                land_speed = np.linalg.norm(land_v, axis=1)
+                score += (land_speed < need) * 517  # (7)
+
         return score, cands, outs, q, ts, w_plat, dt_next, rails_c, landing, land_v
 
     # ---- バックトラック付き深さ優先探索 ----
@@ -367,7 +380,17 @@ def build_path(bounces):
     visits = 0
     max_visits = 120 * N
     i = 0
+    import time as _time
+    _t0 = _time.time()
+    _next_report = 20000
+    _backtracks = {}                 # バウンド番号 → 戻された回数(詰まり箇所の特定用)
     while i < N:
+        if visits >= _next_report:
+            _next_report += 20000
+            worst = sorted(_backtracks.items(), key=lambda kv: -kv[1])[:3]
+            print(f"    [探索進捗] {visits}/{max_visits}ステップ "
+                  f"現在バウンド{i}/{N} 経過{_time.time()-_t0:.0f}s "
+                  f"詰まり上位: {[(k, v) for k, v in worst]}", flush=True)
         t, pitch = bounces[i]
         p_i, v_i, sign, placed, hist_t, hist_p = states[i]
         if tried[i] is None:
@@ -384,6 +407,7 @@ def build_path(bounces):
         exhausted = ptr >= len(order)
         infeasible = (not exhausted) and score[order[ptr]] >= FEASIBLE
         if (exhausted or infeasible) and i > 0 and visits < max_visits:
+            _backtracks[i] = _backtracks.get(i, 0) + 1
             tried[i] = None
             i -= 1
             tried[i][1] += 1
