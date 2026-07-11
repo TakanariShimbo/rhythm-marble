@@ -192,12 +192,14 @@ def main():
 
     if args.apply:
         p = PRESETS[args.apply]
-        # 再開可能: 出力済みはスキップ(中断対策で最新1枚は作り直す)
+        # 再開可能: 出力済みはスキップ(中断対策で最新1枚は作り直す)。
+        # ただし入力フレームの方が新しい場合は再レンダリング後なので作り直す
         done = sorted(args.out.glob("f_*.png"))
         if done:
             done[-1].unlink()
-        have = {q.name for q in args.out.glob("f_*.png")}
-        todo = [f for f in files if f.name not in have]
+        have = {q.name: q.stat().st_mtime for q in args.out.glob("f_*.png")}
+        todo = [f for f in files
+                if f.name not in have or f.stat().st_mtime > have[f.name]]
         print(f"処理済み{len(have)}件スキップ / 残り{len(todo)}件 "
               f"(workers={args.workers})", flush=True)
         work = functools.partial(_apply_one, out=args.out, preset=p)
