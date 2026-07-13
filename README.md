@@ -48,6 +48,18 @@ cd rhythm-marble
 パターンC: ピアノ演奏の音源(mp3/mp4等)しかない
   音源 ──► tools/transcribe.py ──► tools/midi_editor.html ──► pipeline.py audio → ...
           (自動採譜)              (仕上げ)
+
+パターンD: 音源がYouTube上にある
+  URL ──► tools/download.py ──► (以降パターンCと同じ)
+         (yt-dlpでMP3取得)
+```
+
+```bash
+# YouTubeからMP3を取得(downloads/<タイトル>.mp3 に保存)
+uv run tools/download.py "https://www.youtube.com/watch?v=XXXX"
+
+# プロジェクトを作って直接配置(→ そのまま採譜へ)
+uv run tools/download.py "https://..." --project my-song
 ```
 
 ### 0. プロジェクトを作る
