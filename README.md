@@ -117,11 +117,14 @@ uv run python pipeline.py audio data/my-song --track 4 --play
 まず既定の celesta_hall で聴き、キャラクターを変えたいときだけ
 musicbox_hall(よりオルゴール的) / kalimba_hall(より丸く素朴)を試すとよい。
 
-自動で行われる整形: タイの結合(`--tie`)、曲頭の無音カット、そして
-**サウンドフォントの調律補正**。FluidR3のcelestaはピッチ84-89のサンプルが
-+10セント高い(実測)ため、レンダリング時にノート単位のピッチベンドで
-打ち消して全域±1セント以内に揃える(convert.pyの`_apply_tuning_fix`)。
+自動で行われる整形: タイの結合(`--tie`)、曲頭の無音カット。
 音源・動画とも同じ整形を通るため同期は保たれる。
+
+音源は**調律済みサウンドフォント**(`vendor/FluidR3_GM_tuned.sf2`)を使う。
+FluidR3のcelestaはサンプルゾーン単位で調律ずれがあり(84-89が+10セント等、実測)、
+メロディがゾーン境界をまたぐと「半音ずれた」ように聞こえる。
+`tools/tune_sf2.py`(setup.shが自動実行)がサンプルヘッダのpitchCorrectionだけを
+書き換えた調律済みコピーを生成し、全鍵±1セント以内に揃える(波形は無傷)。
 
 出力: `audio.mp3`(音源) / `audio.mid`(抽出された単音メロディ、確認用)
 
@@ -245,7 +248,7 @@ vendor/bpy-venv/bin/python blender_render.py \
 ```
 input/song.mid
   │ convert.py        トラック選択 → 単音メロディ抽出(スカイライン) →
-  │                   GM音色に差し替え → 調律補正 → FluidSynth →
+  │                   GM音色に差し替え → FluidSynth(調律済みSF2) →
   │                   アタック軟化+リバーブ → audio.mp3
   │ make_video.py     物理シミュレーション+板/レール配置+衝突検証
   │                     ├ preview: 簡易3Dレンダラー(PIL) → preview.mp4
@@ -282,6 +285,7 @@ make_video.py        物理+配置+検証+簡易レンダラー(フェーズ2の
 blender_render.py    フォトリアル描画(フェーズ3の中身)
 postfx_lab.py        映像ポスト処理: 試作(比較シート)と全フレーム適用
 tools/download.py    前処理: YouTube→MP3取得(yt-dlp、依存は独立)
+tools/tune_sf2.py    サウンドフォントの調律修正(setup.shが自動実行)
 tools/transcribe.py  前処理: 音源→MIDI自動採譜(依存は独立、uv runで自動解決)
 tools/midi_editor.html 前処理: ブラウザで動くMIDI編集GUI(メロディ仕分け)
 setup.sh             vendor/ と .venv の再構築

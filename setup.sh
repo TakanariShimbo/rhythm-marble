@@ -16,6 +16,10 @@ if [ ! -f vendor/FluidR3_GM.sf2 ]; then
   curl -sL -o vendor/FluidR3_GM.sf2 \
     "https://github.com/pianobooster/fluid-soundfont/releases/download/v3.1/FluidR3_GM.sf2"
 fi
+if [ ! -f vendor/FluidR3_GM_tuned.sf2 ]; then
+  echo "サウンドフォントを調律中(celestaの調律ずれ修正)..."
+  uv run python tools/tune_sf2.py
+fi
 if [ ! -e vendor/bpy-venv/bin/python ]; then
   echo "Blender(bpy)をインストール中(約900MB)..."
   uv venv vendor/bpy-venv --python 3.11

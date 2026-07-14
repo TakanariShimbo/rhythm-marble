@@ -27,7 +27,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 BPY = ROOT / "vendor" / "bpy-venv" / "bin" / "python"
-SF2 = ROOT / "vendor" / "FluidR3_GM.sf2"
+# 調律済みコピー(tools/tune_sf2.py)。celestaの高音ゾーンの調律ずれ
+# (84-89が+10cent等)をサンプルヘッダのpitchCorrectionで修正したもの
+SF2 = ROOT / "vendor" / "FluidR3_GM_tuned.sf2"
 
 
 def run(cmd, **kw):
