@@ -191,6 +191,37 @@ def restyle(midi_data, program: int, octave_shift: int, min_velocity: int):
     return midi_data
 
 
+# FluidR3_GM celesta(program 8)のサンプルゾーン別チューニング誤差(実測、cent)。
+# 84-89のゾーンが+10centずれており、83↔84をまたぐメロディが
+# 「半音ずれた」ように聞こえる原因になる。ピッチベンドで打ち消す。
+_FLUIDR3_CELESTA_CENTS = (
+    (84, 89, +10.0),
+    (90, 95, +1.6),
+    (96, 127, +5.8),
+    (78, 83, -0.8),
+)
+
+
+def _apply_tuning_fix(midi_data, sf2_path: Path):
+    import pretty_midi
+    if "FluidR3" not in sf2_path.name:
+        return
+    for inst in midi_data.instruments:
+        if inst.program != 8:
+            continue
+        bends = []
+        for note in inst.notes:
+            cents = 0.0
+            for lo, hi, c in _FLUIDR3_CELESTA_CENTS:
+                if lo <= note.pitch <= hi:
+                    cents = c
+                    break
+            # ベンドレンジ±2半音(±200cent)前提で誤差を打ち消す
+            bends.append(pretty_midi.PitchBend(
+                pitch=round(-cents / 200 * 8192), time=note.start))
+        inst.pitch_bends = sorted(bends, key=lambda b: b.time)
+
+
 def render(midi_data, sf2_path: Path, out_mp3: Path, gain_db: float,
            reverb: float = 0.0, lowpass: float = 9500,
            wet: float = 0.45, damping: float = 0.25,
@@ -201,6 +232,7 @@ def render(midi_data, sf2_path: Path, out_mp3: Path, gain_db: float,
     import soundfile as sf
 
     print(f"[2/3] レンダリング中 (soundfont: {sf2_path.name})")
+    _apply_tuning_fix(midi_data, sf2_path)
     audio = midi_data.fluidsynth(fs=SAMPLE_RATE, sf2_path=str(sf2_path))
 
     # アタック軟化: 各ノートの頭に短いフェードインをかけ、
