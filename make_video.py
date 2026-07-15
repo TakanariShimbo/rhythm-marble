@@ -214,7 +214,7 @@ def build_path(bounces):
     cand_normals = np.stack([np.sin(tilts), np.cos(tilts), np.zeros_like(tilts)],
                             axis=1)
     FEASIBLE = 500.0
-    MAX_BRANCH = 25
+    MAX_BRANCH = 50
     N = len(bounces)
 
     def plate_w(idx):
