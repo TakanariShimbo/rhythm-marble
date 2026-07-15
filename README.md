@@ -140,7 +140,7 @@ uv run python pipeline.py preview data/my-song --duration 15  # 先頭だけ
 ここで見た動きがそのままフェーズ3の動きになる。
 衝突検証(めり込みゼロ確認)もここで自動実行される。
 
-### 3. final — フォトリアル仕上げ(フル尺で20〜40分)
+### 3. final — フォトリアル仕上げ(1分曲で1時間前後)
 
 ```bash
 uv run python pipeline.py final data/my-song
@@ -201,6 +201,24 @@ uv run python postfx_lab.py data/my-song/output/frames -o /tmp/fxlab
 構図の目安: 額(`dy +1.0`)/ 壁割れハッチ(start)/ タイトル(`dy -0.72`)で
 0秒フレームがサムネイルとして成立する。
 
+### 夜モード — "mood": "night"
+
+`wall.json` に `"mood": "night"` を足すと、同じシーンが夜のルックで描かれる。
+フル版=昼(明るいギャラリー) / サビ版=夜(闇の中で光る仕掛け)という
+シリーズの対比を作るためのスイッチ。
+
+- 環境光・壁・キーライトが深夜の紺〜紫+月明かり風に切り替わる
+- ビー玉に暖色のポイントライトが追随し、通り道の板や壁が接近で浮かび上がる
+- 板は音程色でほのかに常時発光、レールは青白い蓄光風 —
+  周囲を暗く保ったまま構造が読める
+- 壁の文字は行灯風の発光素材になる(黒文字は夜に沈むため)
+- 額のスポットライトはそのまま(暗闇に額が浮かぶ=サムネイル向き)
+
+夜専用の調整キー(いずれも任意):
+`marble_light`(追随ライトW、既定24。減らすほど闇が深い) /
+`plate_glow`(板の自己発光、既定0.6) / `rail_glow`(レール、既定0.25)。
+夜は `lights_energy` の既定が40、`marble_glow` の既定が2.2 に変わる。
+
 ## 前処理ツール (tools/)
 
 ### tools/transcribe.py — 音源→MIDI自動採譜
@@ -230,17 +248,48 @@ uv run tools/transcribe.py 演奏動画.mp4 -o data/my-song/input/song.mid
 - celesta_hall相当の音で再生確認(メロディのみ再生も可、先読みスケジューラで
   大曲でも固まらない)。操作方法は❔ボタン
 
-## その他のコマンド
+## よくある操作レシピ
+
+### 音だけ変える(オクターブ・音色など) — 再レンダリング不要
+
+オクターブや音色は映像に影響しない(シーンはノートの時刻から作られ、
+色は音程クラス基準で不変)。audioを作り直してfinalに音を差し替えるだけでよい:
+
+```bash
+uv run python pipeline.py audio data/my-song --track 0 --octave 1  # 他の設定も忘れず引き継ぐこと
+# scene.json の audio_delay_ms / duration_s を使って再多重化
+ffmpeg -y -i output/final.mp4 -i output/audio.mp3 -map 0:v -map 1:a -c:v copy \
+    -af "adelay=2496:all=1,apad" -t <duration_s> -c:a aac -b:a 192k out.mp4
+```
+
+**注意**: audioの再生成時は `output/config.json` の全設定(特に `--speed` と
+`--min-pitch`)を引き継ぐこと。落とすと音と映像がずれる/音数が変わる。
+逆に**速度やMIDIの変更は映像から作り直し**(フル再レンダリング)になる。
+
+### サビ版(夜)を作る
+
+フル版とは別プロジェクトにする(例: `data/my-song-sabi`)。
+
+1. 元MIDIからサビ区間だけメロディを残した `song.mid` を作る(曲頭の無音は自動カット)
+2. `artwork.jpg` と `wall.json` をコピーし、wall.jsonに `"mood": "night"` を追加
+3. `output/config.json` の設定を引き継いで audio → preview → final
+
+### その他のコマンド
 
 ```bash
 # 衝突検証だけ実行(レンダリングなし)
 uv run python make_video.py data/my-song/input/song.mid --track 4 \
     --audio x -o /dev/null --check
 
-# 1フレームだけ描いて見た目確認(壁の調整に便利)
+# 1フレームだけ描いて見た目確認(壁・夜モードの調整に便利)
 vendor/bpy-venv/bin/python blender_render.py \
     data/my-song/output/scene.json /tmp/chk --frame 0 --engine eevee \
     --wall data/my-song/input/wall.json
+
+# 区間だけ再レンダリング(画像差し替え等でフレームの一部だけ変わったとき)
+vendor/bpy-venv/bin/python blender_render.py \
+    data/my-song/output/scene.json data/my-song/output/frames \
+    --start 0 --end 90 --engine eevee --wall data/my-song/input/wall.json
 ```
 
 ## 仕組み
