@@ -635,13 +635,22 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     scene.frame_end = n_frames - 1
     scene.render.image_settings.file_format = "PNG"
 
+    # ---- 昼/夜モード(wall.jsonの "mood": "night" で夜に) ----
+    # 夜: 環境光を絞り、月明かり風のキーライトとビー玉の発光で見せる。
+    # フル版=昼 / サビ版=夜 という対比を作るための演出スイッチ。
+    night = (sc.get("wall") or {}).get("mood") == "night"
+
     # ---- ワールド(淡い環境光) ----
     world = bpy.data.worlds.new("world")
     scene.world = world
     world.use_nodes = True
     bg = world.node_tree.nodes["Background"]
-    bg.inputs["Color"].default_value = (0.35, 0.42, 0.5, 1)
-    bg.inputs["Strength"].default_value = 0.25
+    if night:
+        bg.inputs["Color"].default_value = (0.02, 0.03, 0.07, 1)
+        bg.inputs["Strength"].default_value = 0.08
+    else:
+        bg.inputs["Color"].default_value = (0.35, 0.42, 0.5, 1)
+        bg.inputs["Strength"].default_value = 0.25
 
     # ---- 壁(すりガラス風の背景、影を受ける) ----
     wall_mat = bpy.data.materials.new("wall")
@@ -652,8 +661,12 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     grad = nt.nodes.new("ShaderNodeTexGradient")
     grad.gradient_type = "DIAGONAL"
     ramp = nt.nodes.new("ShaderNodeValToRGB")
-    ramp.color_ramp.elements[0].color = (0.13, 0.22, 0.28, 1)   # 深い青緑
-    ramp.color_ramp.elements[1].color = (0.42, 0.36, 0.27, 1)   # 温かいグレー金
+    if night:
+        ramp.color_ramp.elements[0].color = (0.012, 0.02, 0.045, 1)  # 深夜の紺
+        ramp.color_ramp.elements[1].color = (0.05, 0.032, 0.06, 1)   # 宵の紫
+    else:
+        ramp.color_ramp.elements[0].color = (0.13, 0.22, 0.28, 1)   # 深い青緑
+        ramp.color_ramp.elements[1].color = (0.42, 0.36, 0.27, 1)   # 温かいグレー金
     coord = nt.nodes.new("ShaderNodeTexCoord")
     # スクリーン座標に固定: カメラがどこへ動いても画面内の色味が一定
     nt.links.new(coord.outputs["Window"], grad.inputs["Vector"])
@@ -671,14 +684,17 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     # カメラに親子付けし、降下してもシーンの明るさが変わらないようにする
     bpy.ops.object.light_add(type="AREA", location=(-2.0, -4.5, 2.5))
     key = bpy.context.object
-    key.data.energy = 360
+    key.data.energy = 55 if night else 360        # 夜は月明かり程度に
     key.data.size = 1.2
     key.rotation_euler = (math.radians(55), 0, math.radians(-30))
     bpy.ops.object.light_add(type="AREA", location=(2.5, -3.5, -1.0))
     fill = bpy.context.object
-    fill.data.energy = 70
+    fill.data.energy = 12 if night else 70
     fill.data.size = 4.0
     fill.rotation_euler = (math.radians(95), 0, math.radians(35))
+    if night:
+        key.data.color = (0.72, 0.80, 1.0)        # 青白い月光
+        fill.data.color = (0.55, 0.60, 0.95)
 
     # ---- 壁のコンテンツ(wall.jsonで自由指定、無ければタイトルのみ) ----
     font = None
@@ -686,8 +702,14 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
         font = bpy.data.fonts.load(JP_FONT)
     except Exception:
         pass
-    text_mat = make_material("walltext", (0.035, 0.035, 0.045, 1),
-                             metallic=0.85, rough=0.35)   # メタリックブラック
+    if night:
+        # 暗い壁では黒文字が沈むので、行灯風にほのかに光る文字にする
+        text_mat = make_material("walltext", (0.92, 0.88, 0.78, 1),
+                                 metallic=0.0, rough=0.6,
+                                 emission=(0.95, 0.90, 0.75, 1))
+    else:
+        text_mat = make_material("walltext", (0.035, 0.035, 0.045, 1),
+                                 metallic=0.85, rough=0.35)   # メタリックブラック
 
     def resolve_at(at, dy=0.0):
         """配置指定: "start"=壁の穴の位置 / "first_plate"=最初の板 / [x, y]"""
@@ -756,7 +778,8 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     # ---- 経路沿いの物理ライト(降下に沿って点在、色はプロジェクト設定) ----
     light_cols = [hex_rgb(c) for c in wall_cfg.get("lights", [])] or \
                  [(1.0, 0.85, 0.65), (0.65, 0.8, 1.0)]
-    light_energy = float(wall_cfg.get("lights_energy", 55))
+    light_energy = float(wall_cfg.get("lights_energy",
+                                  40 if night else 55))
     ys = [b[1] for b in sc["ball"]]
     y_top, y_bot = max(ys) + 1.0, min(ys) - 1.0
     dark_ys = [sc.get("start_pos", [0, 9e9])[1], sc.get("end_pos", [0, -9e9])[1]]
@@ -793,7 +816,18 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     else:
         band = None
     ball = make_marble(sc["ball_r"], band,
-                       glow=float(wall_cfg.get("marble_glow", 1.1)))
+                       glow=float(wall_cfg.get("marble_glow", 2.2 if night else 1.1)))
+    if night:
+        # 夜はビー玉自身を光源に: 通り道の板や壁がボールの接近で浮かび上がる。
+        # Eeveeのエミッションは他を照らさないため、実ライトを追随させる
+        # 玉の中に置くとガラス全体が白飛びするので、少し手前(カメラ側)に浮かす
+        bpy.ops.object.light_add(
+            type="POINT", location=(0, -sc["ball_r"] * 4.5, 0))
+        lamp = bpy.context.object
+        lamp.data.energy = float(wall_cfg.get("marble_light", 24))
+        lamp.data.color = (1.0, 0.92, 0.78)          # 暖かい月光色
+        lamp.data.shadow_soft_size = sc["ball_r"] * 1.5
+        lamp.parent = ball
     spin = sc.get("spin", [0.0] * len(sc["ball"]))
     for f, p in enumerate(sc["ball"]):
         ball.location = to_b(p)
@@ -809,9 +843,16 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     for i, pl in enumerate(sc["plates"]):
         pc = pl["pitch"] % 12
         if pc not in plate_mats:
+            col = pitch_rgb(pl["pitch"])
+            # 夜は板が自分の色でほのかに光る(常時)。周囲を暗く保ったまま
+            # 板の存在と色が読めるようにする。ビー玉より控えめな強度
+            emi = col if night else None
             plate_mats[pc] = make_material(
-                f"plate{pc}", pitch_rgb(pl["pitch"]), metallic=0.85, rough=0.24)
+                f"plate{pc}", col, metallic=0.85, rough=0.24, emission=emi)
             bsdf = plate_mats[pc].node_tree.nodes["Principled BSDF"]
+            if night:
+                bsdf.inputs["Emission Strength"].default_value = float(
+                    wall_cfg.get("plate_glow", 0.6))
             if "Coat Weight" in bsdf.inputs:
                 bsdf.inputs["Coat Weight"].default_value = 0.6
         ob = make_plate(f"p{i}", pl["w"], sc["plat_h"], pl["w"] * 0.85,
@@ -846,6 +887,12 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     # ---- レール(銀の金属) ----
     # レールは「音が鳴らない」素材感: 黒に近いマットなゴム
     rail_mat = make_material("rail", (0.085, 0.085, 0.095, 1), metallic=0.0, rough=0.88)
+    if night:
+        # レールも夜はほのかに光る(青白い蓄光素材のイメージ、板より控えめ)
+        rb = rail_mat.node_tree.nodes["Principled BSDF"]
+        rb.inputs["Emission Color"].default_value = (0.55, 0.65, 0.95, 1)
+        rb.inputs["Emission Strength"].default_value = float(
+            wall_cfg.get("rail_glow", 0.25))
     for i, r in enumerate(sc["rails"]):
         a, b, u = r["a"], r["b"], r["u"]
         ob = make_rail_assembly(r["length"], sc["ball_r"], rail_mat, pin_mat)
