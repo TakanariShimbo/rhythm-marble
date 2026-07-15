@@ -135,6 +135,48 @@ def add_picture_spot(center, energy=120):
     con.target = tgt
 
 
+def add_small_spot(center, energy=10, size_deg=40, f_in=None, f_out=None,
+                   n_frames=None, fps=30):
+    """夜モード用: パーツを個別に照らす小さな薄暗いスポット。
+
+    物体そのものは昼と同じ素材のまま、美術館の夜間照明のように
+    一つ一つへ小さな光を当てる。f_in/f_outで板の出現に合わせて点灯・消灯
+    (ライトはスケールで消せないので hide_render をキーフレームする)。
+    """
+    tgt = bpy.data.objects.new("sspot_target", None)
+    bpy.context.collection.objects.link(tgt)
+    tgt.location = center
+    bpy.ops.object.light_add(
+        type="SPOT", location=(center[0], center[1] - 0.55, center[2] + 0.45))
+    sp = bpy.context.object
+    sp.data.energy = energy
+    sp.data.spot_size = math.radians(size_deg)
+    sp.data.spot_blend = 0.7
+    sp.data.color = (1.0, 0.93, 0.80)
+    sp.data.shadow_soft_size = 0.08
+    con = sp.constraints.new("TRACK_TO")
+    con.target = tgt
+    if f_in is not None and f_in > 0:
+        for ob in (sp,):
+            ob.hide_render = ob.hide_viewport = True
+            ob.keyframe_insert("hide_render", frame=max(0, f_in - 1))
+            ob.keyframe_insert("hide_viewport", frame=max(0, f_in - 1))
+            ob.hide_render = ob.hide_viewport = False
+            ob.keyframe_insert("hide_render", frame=max(1, f_in))
+            ob.keyframe_insert("hide_viewport", frame=max(1, f_in))
+    if f_out is not None and f_out > 0:
+        pop = max(2, int(0.25 * fps))
+        if n_frames is not None and f_out + pop > n_frames - int(0.2 * fps):
+            f_out = n_frames - int(0.2 * fps) - pop
+        sp.hide_render = sp.hide_viewport = False
+        sp.keyframe_insert("hide_render", frame=f_out + pop - 1)
+        sp.keyframe_insert("hide_viewport", frame=f_out + pop - 1)
+        sp.hide_render = sp.hide_viewport = True
+        sp.keyframe_insert("hide_render", frame=f_out + pop)
+        sp.keyframe_insert("hide_viewport", frame=f_out + pop)
+    return sp
+
+
 def setup_stylize(scene, bloom=0.35, vignette=0.30):
     """コンポジタ仕上げ: ブルーム(発光のにじみ)+ビネット(周辺減光)。
 
@@ -684,8 +726,11 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     # カメラに親子付けし、降下してもシーンの明るさが変わらないようにする
     bpy.ops.object.light_add(type="AREA", location=(-2.0, -4.5, 2.5))
     key = bpy.context.object
-    key.data.energy = 55 if night else 360        # 夜は月明かり程度に
-    key.data.size = 1.2
+    # 夜: 月光の強さはwall.jsonのmoon_energyで調整。影(ビー玉・板が壁に
+    # 落とす影)は昼の画の要なので、夜も環境光との比率で影が立つようにする
+    key.data.energy = (float((sc.get("wall") or {}).get("moon_energy", 130))
+                       if night else 360)
+    key.data.size = 0.6 if night else 1.2         # 夜は小さく=影がシャープ
     key.rotation_euler = (math.radians(55), 0, math.radians(-30))
     bpy.ops.object.light_add(type="AREA", location=(2.5, -3.5, -1.0))
     fill = bpy.context.object
@@ -843,16 +888,9 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     for i, pl in enumerate(sc["plates"]):
         pc = pl["pitch"] % 12
         if pc not in plate_mats:
-            col = pitch_rgb(pl["pitch"])
-            # 夜は板が自分の色でほのかに光る(常時)。周囲を暗く保ったまま
-            # 板の存在と色が読めるようにする。ビー玉より控えめな強度
-            emi = col if night else None
             plate_mats[pc] = make_material(
-                f"plate{pc}", col, metallic=0.85, rough=0.24, emission=emi)
+                f"plate{pc}", pitch_rgb(pl["pitch"]), metallic=0.85, rough=0.24)
             bsdf = plate_mats[pc].node_tree.nodes["Principled BSDF"]
-            if night:
-                bsdf.inputs["Emission Strength"].default_value = float(
-                    wall_cfg.get("plate_glow", 0.6))
             if "Coat Weight" in bsdf.inputs:
                 bsdf.inputs["Coat Weight"].default_value = 0.6
         ob = make_plate(f"p{i}", pl["w"], sc["plat_h"], pl["w"] * 0.85,
@@ -867,6 +905,11 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
         f_in = int((pl["t"] - sc["plat_lead"] - t_start) * fps)
         f_out = int((pl["t"] + sc["plat_life"] - t_start) * fps)
         keyframe_visibility(ob, f_in, f_out, fps, n_frames)
+        if night and float(wall_cfg.get("plate_spot", 10)) > 0:
+            # 板1枚ごとに小さな薄暗いスポット(夜間美術館の個別照明)。0で無効
+            add_small_spot(ob.location,
+                           energy=float(wall_cfg.get("plate_spot", 10)),
+                           f_in=f_in, f_out=f_out, n_frames=n_frames, fps=fps)
         # 着弾の瞬間: 板が法線方向に沈んで跳ね返る+一瞬膨らむ(触れてる感)
         f_hit = int((pl["t"] - t_start) * fps)
         nb = to_b(n)
@@ -887,12 +930,6 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
     # ---- レール(銀の金属) ----
     # レールは「音が鳴らない」素材感: 黒に近いマットなゴム
     rail_mat = make_material("rail", (0.085, 0.085, 0.095, 1), metallic=0.0, rough=0.88)
-    if night:
-        # レールも夜はほのかに光る(青白い蓄光素材のイメージ、板より控えめ)
-        rb = rail_mat.node_tree.nodes["Principled BSDF"]
-        rb.inputs["Emission Color"].default_value = (0.55, 0.65, 0.95, 1)
-        rb.inputs["Emission Strength"].default_value = float(
-            wall_cfg.get("rail_glow", 0.25))
     for i, r in enumerate(sc["rails"]):
         a, b, u = r["a"], r["b"], r["u"]
         ob = make_rail_assembly(r["length"], sc["ball_r"], rail_mat, pin_mat)
@@ -914,6 +951,18 @@ def build_scene(sc, engine="eevee", samples=48, scale=1.0):
             keyframe_visibility(ob, f_in, f_out, fps)
         else:
             keyframe_visibility(ob, f_in, f_out, fps, n_frames)
+        if night and float(wall_cfg.get("rail_spot", 8)) > 0:
+            # レールは長いので中央に1灯、長尺(1.6m超)は両端寄りにも追加。0で無効
+            spots = [0.0] if r["length"] <= 1.6 else [-0.3, 0.0, 0.3]
+            for frac in spots:
+                cx = [c[0] + u[0] * r["length"] * frac,
+                      c[1] + u[1] * r["length"] * frac, c[2]]
+                add_small_spot(to_b(cx),
+                               energy=float(wall_cfg.get("rail_spot", 8)),
+                               size_deg=55,
+                               f_in=f_in if f_out != -1 else None,
+                               f_out=f_out if f_out != -1 else None,
+                               n_frames=n_frames, fps=fps)
 
     # ---- カメラ(注視点トラックを追従、浅い被写界深度) ----
     target = bpy.data.objects.new("target", None)
