@@ -196,7 +196,7 @@ def gap_plan(t, p, v_out, dt_next, sx):
 
 # ---------------------------------------------------------------- 経路探索
 
-def build_path(bounces):
+def build_path(bounces, banned=None):
     """物理シミュレーション+バックトラック探索で経路を作る。
 
     返り値:
@@ -397,6 +397,10 @@ def build_path(bounces):
             if abs(p_i[0]) > X_LIMIT:
                 sign = -np.sign(p_i[0])
             res = eval_step(i, t, p_i, v_i, sign, placed, hist_t, hist_p)
+            if banned and i in banned:
+                # 検証リトライ: 実害を出した角度は選択不可にして別ルートを探す
+                for a in banned[i]:
+                    res[0][a] += 1e4
             order = np.argsort(res[0])[:MAX_BRANCH]
             tried[i] = [order, 0, res, sign]
         order, ptr, res, sign = tried[i]
@@ -421,7 +425,7 @@ def build_path(bounces):
         n = cands[best]
         v_out = outs[best]
         chosen[i] = (t, p_i.copy(), pitch, n, v_out.copy(), w_plat, sign,
-                     rails_c is not None)
+                     rails_c is not None, best)
 
         u0 = np.array([n[1], -n[0], 0.0])
         new_placed = placed + [(t, p_i - n * BALL_R, u0,
@@ -461,7 +465,7 @@ def build_path(bounces):
     rails.append((t_exit - t_roll - 2.0, t_exit,
                   S - u_in * 0.45, E + u_in * 0.05, u_in, d_roll + 0.5))
 
-    for i, (t, p_i, pitch, n, v_out, w_plat, sgn, is_gap) in enumerate(chosen):
+    for i, (t, p_i, pitch, n, v_out, w_plat, sgn, is_gap, _a) in enumerate(chosen):
         pts.append((t, p_i, pitch))
         normals.append(n)
         sizes.append(w_plat)
@@ -486,7 +490,7 @@ def build_path(bounces):
             rails.append((t + EXIT_TF - 0.6, t + EXIT_TF + t_stop + 1.0,
                           R0 - u_up * 1.7, R0 + u_up * (d_stop + 0.45),
                           u_up, d_stop + 2.15))
-    return pts, pieces, normals, sizes, rails
+    return pts, pieces, normals, sizes, rails, [c[8] for c in chosen]
 
 
 def ball_pos(pts, pieces, t):
@@ -996,10 +1000,33 @@ def main():
     if args.speed != 1.0:
         bounces = [(t / args.speed, p) for t, p in bounces]
         end_time /= args.speed
-    pts, pieces, normals, sizes, rails = build_path(bounces)
+    # 検証駆動リトライ: 実害(正深度めり込み・板交差)が出たら、原因バウンドで
+    # 選ばれた角度を禁止して探索し直し、別ルートを選ばせる(最大4回)
+    banned = {}
+    for attempt in range(8):
+        pts, pieces, normals, sizes, rails, angles = build_path(bounces, banned)
+        events = find_collisions(pts, pieces, normals, sizes, rails)
+        real = [ev for ev in events
+                if ev[4] >= 0 or "交差" in ev[1]]
+        if not real:
+            break
+        grew = False
+        for j, kind, t0, t1, depth in real:
+            if "交差" in kind:
+                k = j                      # 板自身の角度が原因
+            else:
+                # めり込み開始直前のバウンドの飛行が原因
+                k = max((idx for idx, (bt, _, _) in enumerate(pts) if bt <= t0),
+                        default=j)
+            if angles[k] not in banned.setdefault(k, set()):
+                banned[k].add(angles[k])
+                grew = True
+        if not grew:
+            break
+        print(f"  [検証リトライ {attempt + 1}] 実害{len(real)}件 → "
+              f"禁止角度 {sorted((k, len(v)) for k, v in banned.items())} で再探索")
     print(f"バウンド数: {len(pts)}, レール数: {len(rails)}, 長さ: {end_time:.1f}s")
 
-    events = find_collisions(pts, pieces, normals, sizes, rails)
     if events:
         print(f"⚠ めり込み検出: {len(events)}件")
         for j, kind, t0, t1, depth in events:
